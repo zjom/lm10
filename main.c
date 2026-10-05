@@ -13,14 +13,66 @@
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./wl-hello
  */
 #define _GNU_SOURCE
+#include <stdlib.h>
+
+#include "glib-object.h"
+#include "pango/pango-font.h"
+#include "pango/pango-layout.h"
 #include "xdg-shell-client-protocol.h"
+#include <cairo.h>
+#include <pango/pangocairo.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <wayland-client.h>
+
+struct strlist {
+  size_t len;
+  size_t cap;
+  char **items;
+};
+void strlist_init(struct strlist *sl) {
+  sl->cap = 0;
+  sl->len = 0;
+  sl->items = NULL;
+}
+
+int strlist_resize(struct strlist *sl) {
+  size_t new_cap = sl->cap ? sl->cap * 2 : 8;
+  char **tmp = realloc(sl->items, new_cap * sizeof(*tmp));
+  if (!tmp)
+    return -1;
+  sl->items = tmp;
+  sl->cap = new_cap;
+  return 0;
+}
+
+int strlist_push(struct strlist *sl, const char *s) {
+  if (sl->len == sl->cap) {
+    if (strlist_resize(sl)) {
+      return -1;
+    }
+  }
+  size_t n = strlen(s) + 1;
+  char *copy = malloc(n);
+  if (!copy)
+    return -1;
+  memcpy(copy, s, n);
+  sl->items[sl->len++] = copy;
+  return 0;
+}
+
+void strlist_free(struct strlist *sl) {
+  for (size_t i = 0; i < sl->len; i++) {
+    free(sl->items[i]);
+  }
+  free(sl->items);
+  strlist_init(sl);
+}
 
 struct app {
   struct wl_display *display;
@@ -33,6 +85,7 @@ struct app {
   struct xdg_toplevel *toplevel;
   int width, height;
   bool running;
+  struct strlist *items;
 };
 
 /* ---- shared-memory buffer ---- */
@@ -67,9 +120,53 @@ static struct wl_buffer *draw_frame(struct app *app) {
   wl_shm_pool_destroy(pool);
   close(fd);
 
-  for (int y = 0; y < h; y++)
-    for (int x = 0; x < w; x++)
-      px[y * w + x] = ((x / 32 + y / 32) % 2) ? 0xFF3B82F6 : 0xFFEEEEEE;
+  cairo_surface_t *cs = cairo_image_surface_create_for_data(
+      (unsigned char *)px, CAIRO_FORMAT_RGB24, w, h, stride);
+  cairo_t *cr = cairo_create(cs);
+
+  int step = 20;
+  cairo_set_source_rgb(cr, 0.8, 0.8, 0.8);
+  cairo_set_line_width(cr, 1.0);
+  for (int x = 0; x <= w; x += step) {
+    cairo_move_to(cr, x + 0.5, 0);
+    cairo_line_to(cr, x + 0.5, h);
+  }
+  for (int y = 0; y <= h; y += step) {
+    cairo_move_to(cr, 0, y + 0.5);
+    cairo_line_to(cr, w, y + 0.5);
+  }
+  cairo_stroke(cr);
+
+  PangoLayout *layout = pango_cairo_create_layout(cr);
+  PangoFontDescription *font =
+      pango_font_description_from_string("Sans Bold 28");
+  pango_layout_set_font_description(layout, font);
+  pango_font_description_free(font);
+
+  GString *s = g_string_new(NULL);
+  for (size_t i = 0; i < app->items->len; i++) {
+    if (i)
+      g_string_append_c(s, '\n');
+    g_string_append(s, app->items->items[i]);
+  }
+  pango_layout_set_text(layout, s->str, -1);
+  g_string_free(s, TRUE);
+
+  int tw, th;
+  pango_layout_get_pixel_size(layout, &tw, &th);
+  double tx = (w - tw) / 2.0, ty = (h - th) / 2.0;
+  cairo_set_source_rgba(cr, 1, 1, 1, 0.5);
+  cairo_rectangle(cr, tx - 16, ty - 8, tw + 32, th + 16);
+  cairo_fill(cr);
+
+  cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
+  cairo_move_to(cr, tx, ty);
+  pango_cairo_show_layout(cr, layout);
+
+  g_object_unref(layout);
+  cairo_destroy(cr);
+  cairo_surface_flush(cs);
+  cairo_surface_destroy(cs);
 
   munmap(px, size);
   wl_buffer_add_listener(buf, &buffer_listener, NULL);
@@ -149,8 +246,15 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
-int main(void) {
-  struct app app = {.width = 640, .height = 480, .running = true};
+int main(int argc, char *argv[]) {
+  struct strlist items;
+  strlist_init(&items);
+  for (int i = 0; i < argc; i++) {
+    strlist_push(&items, argv[i]);
+  }
+
+  struct app app = {
+      .width = 640, .height = 480, .running = true, .items = &items};
 
   app.display = wl_display_connect(NULL);
   if (!app.display) {
@@ -186,5 +290,6 @@ int main(void) {
   wl_compositor_destroy(app.compositor);
   wl_registry_destroy(app.registry);
   wl_display_disconnect(app.display);
+  strlist_free(app.items);
   return 0;
 }
