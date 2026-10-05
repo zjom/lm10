@@ -48,7 +48,7 @@ static const struct wl_buffer_listener buffer_listener = {
 static struct wl_buffer *draw_frame(struct app *app) {
   int w = app->width, h = app->height, stride = w * 4, size = stride * h;
 
-  int fd = memfd_create("wl-hello-shm", MFD_CLOEXEC);
+  int fd = memfd_create("lm10-shm", MFD_CLOEXEC);
   if (fd < 0 || ftruncate(fd, size) < 0) {
     perror("shm");
     return NULL;
