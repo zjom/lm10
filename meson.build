@@ -33,6 +33,6 @@ executable(
   'main.c',
   xdg_shell_code,
   xdg_shell_header,
-  dependencies: [wayland_client, dependency('pangocairo')],
+  dependencies: [wayland_client, dependency('pangocairo'), dependency('xkbcommon')],
   install: true,
 )

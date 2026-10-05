@@ -32,6 +32,7 @@
             wayland-protocols
             pango
             cairo
+            libxkbcommon
           ];
 
           meta = {
