@@ -21,6 +21,8 @@
 
           # Tools that run at build time
           nativeBuildInputs = with pkgs; [
+            meson
+            ninja
             pkg-config
             wayland-scanner
           ];
@@ -28,9 +30,9 @@
           buildInputs = with pkgs; [
             wayland
             wayland-protocols
+            pango
+            cairo
           ];
-
-          makeFlags = [ "PREFIX=$(out)" ];
 
           meta = {
             description = "Minimal xdg-shell Wayland client";
@@ -47,7 +49,6 @@
             gdb
             valgrind
             clang-tools
-            gnumake
           ];
         };
       });
