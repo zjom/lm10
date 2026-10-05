@@ -9,7 +9,6 @@
 #define _GNU_SOURCE
 
 #include "glib-object.h"
-#include "glibconfig.h"
 #include "pango/pango-font.h"
 #include "pango/pango-layout.h"
 #include "xdg-shell-client-protocol.h"
@@ -74,6 +73,40 @@ void strlist_free(struct strlist *sl) {
   strlist_init(sl);
 }
 
+enum lm10error {
+  LM_ERR_UNKNOWN_KEYMAP_FORMAT = -1,
+  LM_ERR_KEYMAP_COMPILE_FAILED = -2,
+  LM_ERR_KEY_EVENT_NO_KEYMAP = -3,
+  LM_ERR_FAILED_CREATE_STATE_FROM_KEYMAP = -4,
+  LM_ERR_MMAP = -5,
+  LM_ERR_SHM = -6,
+};
+static void lm10_perror(enum lm10error code) {
+  switch (code) {
+  case LM_ERR_UNKNOWN_KEYMAP_FORMAT:
+    fprintf(stderr, "unknown keymap format\n");
+    break;
+  case LM_ERR_KEYMAP_COMPILE_FAILED:
+    fprintf(stderr, "failed to compile keymap\n");
+    break;
+  case LM_ERR_KEY_EVENT_NO_KEYMAP:
+    fprintf(stderr, "received key event when no keymap registered\n");
+    break;
+  case LM_ERR_FAILED_CREATE_STATE_FROM_KEYMAP:
+    fprintf(stderr, "xkb failed to create state from keymap\n");
+    break;
+  case LM_ERR_MMAP:
+    fprintf(stderr, "mmap error\n");
+    break;
+  case LM_ERR_SHM:
+    fprintf(stderr, "shm error\n");
+    break;
+  default:
+    fprintf(stderr, "unknown error\n");
+    break;
+  }
+}
+
 struct app;
 
 struct seat {
@@ -86,7 +119,6 @@ struct seat {
   struct wl_keyboard *wl_kbd;
   struct {
     uint32_t serial;
-    struct xkb_context *xkb_ctx;
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
   } kbd;
@@ -101,11 +133,37 @@ struct app {
   struct wl_surface *surface;
   struct xdg_surface *xdg_surface;
   struct xdg_toplevel *toplevel;
-  struct seat *seat;
+  struct xkb_context *xkb_ctx;
+  struct seat seat;
   int width, height;
   bool running;
+  enum lm10error errcode;
   struct strlist *items;
 };
+
+static void seat_free(struct seat *s) {
+  free(s->name);
+  s->name = NULL;
+  s->wl_name = 0;
+
+  s->app = NULL;
+
+  if (s->wl_kbd != NULL) {
+    wl_keyboard_release(s->wl_kbd);
+    s->wl_kbd = NULL;
+    s->kbd.serial = 0;
+    xkb_keymap_unref(s->kbd.xkb_keymap);
+    s->kbd.xkb_keymap = NULL;
+    xkb_state_unref(s->kbd.xkb_state);
+    s->kbd.xkb_state = NULL;
+  }
+
+  if (s->wl_seat != NULL) {
+    wl_seat_get_version(s->wl_seat) >= 5 ? wl_seat_release(s->wl_seat)
+                                         : wl_seat_destroy(s->wl_seat);
+    s->wl_seat = NULL;
+  }
+}
 
 /* ---- shared-memory buffer ---- */
 
@@ -122,13 +180,16 @@ static struct wl_buffer *draw_frame(struct app *app) {
 
   int fd = memfd_create("lm10-shm", MFD_CLOEXEC);
   if (fd < 0 || ftruncate(fd, size) < 0) {
-    perror("shm");
+    app->errcode = LM_ERR_SHM;
+    if (fd >= 0) {
+      close(fd);
+    }
     return NULL;
   }
 
   uint32_t *px = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (px == MAP_FAILED) {
-    perror("mmap");
+    app->errcode = LM_ERR_MMAP;
     close(fd);
     return NULL;
   }
@@ -255,25 +316,40 @@ static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
   struct seat *seat = data;
 
   xkb_keymap_unref(seat->kbd.xkb_keymap);
+  seat->kbd.xkb_keymap = NULL;
   xkb_state_unref(seat->kbd.xkb_state);
+  seat->kbd.xkb_state = NULL;
 
   if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
-    fprintf(stderr, "illegal keymap format");
+    seat->app->errcode = LM_ERR_UNKNOWN_KEYMAP_FORMAT;
+    close(fd);
     return;
   }
 
   char *buf = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-  struct xkb_keymap *keymap = xkb_keymap_new_from_string(
-      seat->kbd.xkb_ctx, buf, XKB_KEYMAP_FORMAT_TEXT_V1,
-      XKB_KEYMAP_COMPILE_NO_FLAGS);
-  if (keymap == NULL) {
-    fprintf(stderr, "failed to compile xkb keymap");
+  if (buf == MAP_FAILED) {
+    seat->app->errcode = LM_ERR_MMAP;
+    close(fd);
+    return;
   }
+  struct xkb_keymap *keymap = xkb_keymap_new_from_string(
+      seat->app->xkb_ctx, buf, XKB_KEYMAP_FORMAT_TEXT_V1,
+      XKB_KEYMAP_COMPILE_NO_FLAGS);
   munmap(buf, size);
   close(fd);
 
+  if (keymap == NULL) {
+    seat->app->errcode = LM_ERR_KEYMAP_COMPILE_FAILED;
+    return;
+  }
+  struct xkb_state *xkb_state = xkb_state_new(keymap);
+  if (xkb_state == NULL) {
+    xkb_keymap_unref(keymap);
+    seat->app->errcode = LM_ERR_FAILED_CREATE_STATE_FROM_KEYMAP;
+    return;
+  }
   seat->kbd.xkb_keymap = keymap;
-  seat->kbd.xkb_state = xkb_state_new(keymap);
+  seat->kbd.xkb_state = xkb_state;
 }
 
 static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
@@ -284,6 +360,10 @@ static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
   (void)serial;
   (void)time;
 
+  if (seat->kbd.xkb_state == NULL) {
+    seat->app->errcode = LM_ERR_KEY_EVENT_NO_KEYMAP;
+    return;
+  }
   bool ctrl_active = xkb_state_mod_name_is_active(
       seat->kbd.xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
   if (state == WL_KEYBOARD_KEY_STATE_PRESSED && ctrl_active) {
@@ -316,14 +396,6 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
                                   uint32_t serial, struct wl_surface *surface) {
   struct seat *seat = data;
   seat->kbd.serial = 0;
-
-  if (seat->kbd.xkb_state != NULL && seat->kbd.xkb_keymap != NULL) {
-    const xkb_layout_index_t layout_count =
-        xkb_keymap_num_layouts(seat->kbd.xkb_keymap);
-
-    for (xkb_layout_index_t i = 0; i < layout_count; i++)
-      xkb_state_update_mask(seat->kbd.xkb_state, 0, 0, 0, i, i, i);
-  }
   (void)wl_keyboard;
   (void)serial;
   (void)surface;
@@ -337,6 +409,10 @@ static void keyboard_handle_modifiers(void *data,
   (void)serial;
   (void)wl_keyboard;
   struct seat *seat = data;
+  if (seat->kbd.xkb_state == NULL) {
+    seat->app->errcode = LM_ERR_KEY_EVENT_NO_KEYMAP;
+    return;
+  }
   xkb_state_update_mask(seat->kbd.xkb_state, mods_depressed, mods_latched,
                         mods_locked, 0, 0, group);
 }
@@ -366,15 +442,18 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
     if (seat->wl_kbd == NULL) {
       seat->wl_kbd = wl_seat_get_keyboard(wl_seat);
       wl_keyboard_add_listener(seat->wl_kbd, &keyboard_listener, seat);
-      seat->kbd.xkb_ctx = xkb_context_new(0);
     }
   } else {
     if (seat->wl_kbd != NULL) {
-      wl_keyboard_release(seat->wl_kbd);
+      wl_keyboard_get_version(seat->wl_kbd) >= 3
+          ? wl_keyboard_release(seat->wl_kbd)
+          : wl_keyboard_destroy(seat->wl_kbd);
       seat->wl_kbd = NULL;
-      xkb_context_unref(seat->kbd.xkb_ctx);
       xkb_state_unref(seat->kbd.xkb_state);
+      seat->kbd.xkb_state = NULL;
       xkb_keymap_unref(seat->kbd.xkb_keymap);
+      seat->kbd.xkb_keymap = NULL;
+
       seat->kbd.serial = 0;
     }
   }
@@ -396,13 +475,13 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
     app->wm_base = wl_registry_bind(reg, name, &xdg_wm_base_interface, 1);
     xdg_wm_base_add_listener(app->wm_base, &wm_base_listener, app);
   } else if (strcmp(iface, wl_seat_interface.name) == 0) {
-    app->seat = malloc(sizeof(struct seat));
-    app->seat->wl_name = name;
-    app->seat->name = NULL;
-    app->seat->wl_seat =
-        wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 4));
-    app->seat->wl_kbd = NULL;
-    wl_seat_add_listener(app->seat->wl_seat, &seat_listener, app->seat);
+    seat_free(&app->seat);
+    app->seat.wl_seat =
+        wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 5));
+    app->seat.wl_name = name;
+    app->seat.app = app;
+
+    wl_seat_add_listener(app->seat.wl_seat, &seat_listener, &app->seat);
   }
 }
 static void registry_global_remove(void *data, struct wl_registry *reg,
@@ -422,9 +501,17 @@ int main(int argc, char *argv[]) {
   for (int i = 0; i < argc; i++) {
     strlist_push(&items, argv[i]);
   }
+  struct xkb_context *xkb_ctx = xkb_context_new(0);
+  if (xkb_ctx == NULL) {
+    fprintf(stderr, "failed to create xkb context\n");
+    return 1;
+  }
 
-  struct app app = {
-      .width = 640, .height = 480, .running = true, .items = &items};
+  struct app app = {.width = 640,
+                    .height = 480,
+                    .running = true,
+                    .items = &items,
+                    .xkb_ctx = xkb_ctx};
 
   app.display = wl_display_connect(NULL);
   if (!app.display) {
@@ -448,9 +535,39 @@ int main(int argc, char *argv[]) {
   xdg_toplevel_add_listener(app.toplevel, &toplevel_listener, &app);
   xdg_toplevel_set_title(app.toplevel, "Hello Wayland");
   wl_surface_commit(app.surface); /* empty commit -> triggers first configure */
+  int err = 0;
+  while (app.running) {
+    if (wl_display_dispatch(app.display) == -1) {
+      err = wl_display_get_error(app.display);
 
-  while (app.running && wl_display_dispatch(app.display) != -1)
-    ;
+      if (err == EPROTO) {
+        // It was a Wayland protocol violation
+        const struct wl_interface *interface;
+        uint32_t id;
+        uint32_t code =
+            wl_display_get_protocol_error(app.display, &interface, &id);
+
+        fprintf(
+            stderr,
+            "Fatal Protocol Error: Interface %s, Object ID %u, Error Code %u\n",
+            interface != NULL ? interface->name : "unknown", id, code);
+      } else {
+        // It was a system/socket error (e.g., EPIPE, ECONNRESET)
+        fprintf(stderr, "Fatal Socket Error: %s\n", strerror(err));
+      }
+
+      break;
+    }
+
+    if (app.errcode != 0) {
+      lm10_perror(app.errcode);
+      err = app.errcode;
+      break;
+    }
+  };
+
+  xkb_context_unref(app.xkb_ctx);
+  seat_free(&app.seat);
 
   xdg_toplevel_destroy(app.toplevel);
   xdg_surface_destroy(app.xdg_surface);
@@ -459,7 +576,8 @@ int main(int argc, char *argv[]) {
   wl_shm_destroy(app.shm);
   wl_compositor_destroy(app.compositor);
   wl_registry_destroy(app.registry);
+
   wl_display_disconnect(app.display);
   strlist_free(app.items);
-  return 0;
+  return err == 0 ? 0 : 1;
 }
