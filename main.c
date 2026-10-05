@@ -6,9 +6,8 @@
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/lm10
  */
+#include "glibconfig.h"
 #define _GNU_SOURCE
-#include <stdlib.h>
-
 #include "glib-object.h"
 #include "pango/pango-font.h"
 #include "pango/pango-layout.h"
@@ -19,9 +18,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <wayland-client-protocol.h>
 #include <wayland-client.h>
 
 struct strlist {
@@ -68,6 +69,18 @@ void strlist_free(struct strlist *sl) {
   strlist_init(sl);
 }
 
+struct keyboard {
+  struct wl_keyboard *wl_kbd;
+  // keymap ??
+};
+
+struct seat {
+  char *name;
+  uint32_t wl_name;
+  struct wl_seat *wl_seat;
+  struct wl_keyboard *wl_kbd;
+};
+
 struct app {
   struct wl_display *display;
   struct wl_registry *registry;
@@ -77,6 +90,7 @@ struct app {
   struct wl_surface *surface;
   struct xdg_surface *xdg_surface;
   struct xdg_toplevel *toplevel;
+  struct seat *seat;
   int width, height;
   bool running;
   struct strlist *items;
@@ -214,11 +228,114 @@ static const struct xdg_toplevel_listener toplevel_listener = {
     .close = toplevel_close,
 };
 
+/* ---- seat listener ---- */
+
+static void keyboard_handle_repeat(void *data, struct wl_keyboard *wl_keyboard,
+                                   int32_t rate, int32_t delay) {
+  (void)data;
+  (void)wl_keyboard;
+  (void)rate;
+  (void)delay;
+}
+
+static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
+                                   uint32_t format, int32_t fd, uint32_t size) {
+  (void)data;
+  (void)wl_keyboard;
+  (void)format;
+  (void)fd;
+  (void)size;
+}
+
+static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
+                                uint32_t serial, uint32_t time, uint32_t key,
+                                uint32_t state) {
+  (void)data;
+  (void)wl_keyboard;
+  (void)serial;
+  (void)time;
+
+  if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+    printf("%d PRESSED at %d\n", key, state);
+  }
+  if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+    printf("%d RELEASED at %d\n", key, state);
+  }
+}
+
+static void keyboard_handle_enter(void *data, struct wl_keyboard *wl_keyboard,
+                                  uint32_t serial, struct wl_surface *surface,
+                                  struct wl_array *keys) {
+  (void)data;
+  (void)wl_keyboard;
+  (void)serial;
+  (void)surface;
+  (void)keys;
+}
+static void keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
+                                  uint32_t serial, struct wl_surface *surface) {
+  (void)data;
+  (void)wl_keyboard;
+  (void)serial;
+  (void)surface;
+}
+
+static void keyboard_handle_modifiers(void *data,
+                                      struct wl_keyboard *wl_keyboard,
+                                      uint32_t serial, uint32_t mods_depressed,
+                                      uint32_t mods_latched,
+                                      uint32_t mods_locked, uint32_t group) {
+  (void)data;
+  (void)wl_keyboard;
+  (void)serial;
+  (void)mods_depressed;
+  (void)mods_latched;
+  (void)mods_locked;
+  (void)group;
+}
+
+static const struct wl_keyboard_listener keyboard_listener = {
+    .repeat_info = keyboard_handle_repeat,
+    .key = keyboard_handle_key,
+    .keymap = keyboard_handle_keymap,
+    .enter = keyboard_handle_enter,
+    .leave = keyboard_handle_leave,
+    .modifiers = keyboard_handle_modifiers};
+
+static void seat_handle_name(void *data, struct wl_seat *wl_seat,
+                             const char *name) {
+  (void)wl_seat;
+  struct seat *seat = data;
+  free(seat->name);
+  seat->name = strdup(name);
+}
+
+static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
+                                     enum wl_seat_capability caps) {
+  struct seat *seat = data;
+  if (seat->wl_kbd != NULL && !(caps & WL_SEAT_CAPABILITY_KEYBOARD)) {
+    wl_keyboard_release(seat->wl_kbd);
+    seat->wl_kbd = NULL;
+    return;
+  }
+
+  if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && seat->wl_kbd != NULL) {
+    struct wl_keyboard *wl_keyboard = wl_seat_get_keyboard(wl_seat);
+    if (wl_keyboard && wl_keyboard == seat->wl_kbd) {
+      return;
+    }
+    wl_keyboard_add_listener(wl_keyboard, &keyboard_listener, seat);
+    seat->wl_kbd = wl_keyboard;
+  }
+}
+
+static const struct wl_seat_listener seat_listener = {
+    .name = seat_handle_name, .capabilities = seat_handle_capabilities};
+
 /* ---- registry ---- */
 
 static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
                             const char *iface, uint32_t version) {
-  (void)version;
   struct app *app = data;
   if (strcmp(iface, wl_compositor_interface.name) == 0) {
     app->compositor = wl_registry_bind(reg, name, &wl_compositor_interface, 4);
@@ -227,6 +344,14 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
   } else if (strcmp(iface, xdg_wm_base_interface.name) == 0) {
     app->wm_base = wl_registry_bind(reg, name, &xdg_wm_base_interface, 1);
     xdg_wm_base_add_listener(app->wm_base, &wm_base_listener, app);
+  } else if (strcmp(iface, wl_seat_interface.name) == 0) {
+    app->seat = malloc(sizeof(struct seat));
+    app->seat->wl_name = name;
+    app->seat->name = NULL;
+    app->seat->wl_seat =
+        wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 4));
+    app->seat->wl_kbd = NULL;
+    wl_seat_add_listener(app->seat->wl_seat, &seat_listener, app->seat);
   }
 }
 static void registry_global_remove(void *data, struct wl_registry *reg,
