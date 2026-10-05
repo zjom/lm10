@@ -6,12 +6,14 @@
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/lm10
  */
-#include "glibconfig.h"
 #define _GNU_SOURCE
+
 #include "glib-object.h"
+#include "glibconfig.h"
 #include "pango/pango-font.h"
 #include "pango/pango-layout.h"
 #include "xdg-shell-client-protocol.h"
+#include <assert.h>
 #include <cairo.h>
 #include <pango/pangocairo.h>
 #include <stdbool.h>
@@ -24,6 +26,9 @@
 #include <unistd.h>
 #include <wayland-client-protocol.h>
 #include <wayland-client.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
+#include <xkbcommon/xkbcommon-names.h>
+#include <xkbcommon/xkbcommon.h>
 
 struct strlist {
   size_t len;
@@ -69,16 +74,22 @@ void strlist_free(struct strlist *sl) {
   strlist_init(sl);
 }
 
-struct keyboard {
-  struct wl_keyboard *wl_kbd;
-  // keymap ??
-};
+struct app;
 
 struct seat {
   char *name;
   uint32_t wl_name;
   struct wl_seat *wl_seat;
+
+  struct app *app;
+
   struct wl_keyboard *wl_kbd;
+  struct {
+    uint32_t serial;
+    struct xkb_context *xkb_ctx;
+    struct xkb_keymap *xkb_keymap;
+    struct xkb_state *xkb_state;
+  } kbd;
 };
 
 struct app {
@@ -240,41 +251,79 @@ static void keyboard_handle_repeat(void *data, struct wl_keyboard *wl_keyboard,
 
 static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
                                    uint32_t format, int32_t fd, uint32_t size) {
-  (void)data;
   (void)wl_keyboard;
-  (void)format;
-  (void)fd;
-  (void)size;
+  struct seat *seat = data;
+
+  xkb_keymap_unref(seat->kbd.xkb_keymap);
+  xkb_state_unref(seat->kbd.xkb_state);
+
+  if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+    fprintf(stderr, "illegal keymap format");
+    return;
+  }
+
+  char *buf = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+  struct xkb_keymap *keymap = xkb_keymap_new_from_string(
+      seat->kbd.xkb_ctx, buf, XKB_KEYMAP_FORMAT_TEXT_V1,
+      XKB_KEYMAP_COMPILE_NO_FLAGS);
+  if (keymap == NULL) {
+    fprintf(stderr, "failed to compile xkb keymap");
+  }
+  munmap(buf, size);
+  close(fd);
+
+  seat->kbd.xkb_keymap = keymap;
+  seat->kbd.xkb_state = xkb_state_new(keymap);
 }
 
 static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
                                 uint32_t serial, uint32_t time, uint32_t key,
                                 uint32_t state) {
-  (void)data;
+  struct seat *seat = data;
   (void)wl_keyboard;
   (void)serial;
   (void)time;
 
-  if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
-    printf("%d PRESSED at %d\n", key, state);
-  }
-  if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
-    printf("%d RELEASED at %d\n", key, state);
+  bool ctrl_active = xkb_state_mod_name_is_active(
+      seat->kbd.xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
+  if (state == WL_KEYBOARD_KEY_STATE_PRESSED && ctrl_active) {
+    xkb_keysym_t keysym =
+        xkb_state_key_get_one_sym(seat->kbd.xkb_state, key + 8);
+
+    switch (keysym) {
+    case XKB_KEY_n:
+      printf("C-n\n");
+      break;
+    case XKB_KEY_p:
+      printf("C-p\n");
+      break;
+    default:
+      return;
+    }
   }
 }
 
 static void keyboard_handle_enter(void *data, struct wl_keyboard *wl_keyboard,
                                   uint32_t serial, struct wl_surface *surface,
                                   struct wl_array *keys) {
-  (void)data;
+  struct seat *seat = data;
+  seat->kbd.serial = serial;
   (void)wl_keyboard;
-  (void)serial;
   (void)surface;
   (void)keys;
 }
 static void keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
                                   uint32_t serial, struct wl_surface *surface) {
-  (void)data;
+  struct seat *seat = data;
+  seat->kbd.serial = 0;
+
+  if (seat->kbd.xkb_state != NULL && seat->kbd.xkb_keymap != NULL) {
+    const xkb_layout_index_t layout_count =
+        xkb_keymap_num_layouts(seat->kbd.xkb_keymap);
+
+    for (xkb_layout_index_t i = 0; i < layout_count; i++)
+      xkb_state_update_mask(seat->kbd.xkb_state, 0, 0, 0, i, i, i);
+  }
   (void)wl_keyboard;
   (void)serial;
   (void)surface;
@@ -285,13 +334,11 @@ static void keyboard_handle_modifiers(void *data,
                                       uint32_t serial, uint32_t mods_depressed,
                                       uint32_t mods_latched,
                                       uint32_t mods_locked, uint32_t group) {
-  (void)data;
-  (void)wl_keyboard;
   (void)serial;
-  (void)mods_depressed;
-  (void)mods_latched;
-  (void)mods_locked;
-  (void)group;
+  (void)wl_keyboard;
+  struct seat *seat = data;
+  xkb_state_update_mask(seat->kbd.xkb_state, mods_depressed, mods_latched,
+                        mods_locked, 0, 0, group);
 }
 
 static const struct wl_keyboard_listener keyboard_listener = {
@@ -313,19 +360,23 @@ static void seat_handle_name(void *data, struct wl_seat *wl_seat,
 static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
                                      enum wl_seat_capability caps) {
   struct seat *seat = data;
-  if (seat->wl_kbd != NULL && !(caps & WL_SEAT_CAPABILITY_KEYBOARD)) {
-    wl_keyboard_release(seat->wl_kbd);
-    seat->wl_kbd = NULL;
-    return;
-  }
+  assert(seat->wl_seat == wl_seat);
 
-  if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && seat->wl_kbd != NULL) {
-    struct wl_keyboard *wl_keyboard = wl_seat_get_keyboard(wl_seat);
-    if (wl_keyboard && wl_keyboard == seat->wl_kbd) {
-      return;
+  if (caps & WL_SEAT_CAPABILITY_KEYBOARD) {
+    if (seat->wl_kbd == NULL) {
+      seat->wl_kbd = wl_seat_get_keyboard(wl_seat);
+      wl_keyboard_add_listener(seat->wl_kbd, &keyboard_listener, seat);
+      seat->kbd.xkb_ctx = xkb_context_new(0);
     }
-    wl_keyboard_add_listener(wl_keyboard, &keyboard_listener, seat);
-    seat->wl_kbd = wl_keyboard;
+  } else {
+    if (seat->wl_kbd != NULL) {
+      wl_keyboard_release(seat->wl_kbd);
+      seat->wl_kbd = NULL;
+      xkb_context_unref(seat->kbd.xkb_ctx);
+      xkb_state_unref(seat->kbd.xkb_state);
+      xkb_keymap_unref(seat->kbd.xkb_keymap);
+      seat->kbd.serial = 0;
+    }
   }
 }
 
