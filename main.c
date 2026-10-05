@@ -2,15 +2,9 @@
  * Minimal Wayland client: opens an xdg-shell window filled with a checkerboard.
  *
  * Build:
- *   wayland-scanner client-header \
- *     /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml
- * xdg-shell-client-protocol.h
- *   wayland-scanner private-code \
- *     /usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml
- * xdg-shell-protocol.c cc -o wl-hello wl-hello.c xdg-shell-protocol.c
- * -lwayland-client
+ * mkdir bld && meson setup bld && ninja -C bld
  *
- * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./wl-hello
+ * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/lm10
  */
 #define _GNU_SOURCE
 #include <stdlib.h>
