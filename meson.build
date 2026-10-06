@@ -7,6 +7,7 @@ project(
 )
 
 incdir = include_directories('include')
+srcs = files('main.c', 'fdm.c')
 
 wayland_client = dependency('wayland-client')
 wayland_protocols = dependency('wayland-protocols')
@@ -32,7 +33,7 @@ xdg_shell_code = custom_target(
 
 executable(
   'lm10',
-  'main.c',
+  srcs,
   xdg_shell_code,
   xdg_shell_header,
   include_directories: incdir,

@@ -8,12 +8,14 @@
  */
 #define _GNU_SOURCE
 
+#include "fdm.h"
 #include "glib-object.h"
 #include "pango/pango-font.h"
 #include "pango/pango-layout.h"
 #include "xdg-shell-client-protocol.h"
 #include <assert.h>
 #include <cairo.h>
+#include <errno.h>
 #include <pango/pangocairo.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -21,13 +23,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon-names.h>
 #include <xkbcommon/xkbcommon.h>
+
+#define STB_DS_IMPLEMENTATION
+#include "stb_ds.h"
 
 struct strlist {
   size_t len;
@@ -109,6 +116,12 @@ static void lm10_perror(enum lm10error code) {
 
 struct app;
 
+struct repeat {
+  int32_t rate;
+  int32_t delay;
+  // timer
+};
+
 struct seat {
   char *name;
   uint32_t wl_name;
@@ -121,6 +134,7 @@ struct seat {
     uint32_t serial;
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
+    struct repeat repeat;
   } kbd;
 };
 
@@ -135,6 +149,7 @@ struct app {
   struct xdg_toplevel *toplevel;
   struct xkb_context *xkb_ctx;
   struct seat seat;
+  struct fdm fdm;
   int width, height;
   bool running;
   enum lm10error errcode;
@@ -495,7 +510,45 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
+static int32_t handle_display_events(struct fdm *fdm, void *data) {
+  (void)fdm;
+  struct app *app = data;
+  int err = 0;
+
+  if (wl_display_read_events(app->display) != -1) {
+    err = wl_display_get_error(app->display);
+    printf("failed to read display events");
+    return err;
+  }
+
+  if (wl_display_dispatch_pending(app->display) != -1) {
+    err = wl_display_get_error(app->display);
+
+    if (err == EPROTO) {
+      // It was a Wayland protocol violation
+      const struct wl_interface *interface;
+      uint32_t id;
+      uint32_t code =
+          wl_display_get_protocol_error(app->display, &interface, &id);
+
+      fprintf(stderr,
+              "Fatal Protocol Error: Interface %s, Object ID %u, Error "
+              "Code %u\n",
+              interface != NULL ? interface->name : "unknown", id, code);
+    } else {
+      // It was a system/socket error (e.g., EPIPE, ECONNRESET)
+      fprintf(stderr, "Fatal Socket Error: %s\n", strerror(err));
+    }
+
+    return err;
+  }
+
+  return err;
+}
+
 int main(int argc, char *argv[]) {
+  int err = 0;
+
   struct strlist items;
   strlist_init(&items);
   for (int i = 0; i < argc; i++) {
@@ -504,19 +557,28 @@ int main(int argc, char *argv[]) {
   struct xkb_context *xkb_ctx = xkb_context_new(0);
   if (xkb_ctx == NULL) {
     fprintf(stderr, "failed to create xkb context\n");
-    return 1;
+    err = 1;
+    goto cleanup;
   }
 
-  struct app app = {.width = 640,
-                    .height = 480,
-                    .running = true,
-                    .items = &items,
-                    .xkb_ctx = xkb_ctx};
+  struct app app = {
+      .width = 640,
+      .height = 480,
+      .running = true,
+      .items = &items,
+      .xkb_ctx = xkb_ctx,
+  };
+  if (fdm_init(&app.fdm) != 0) {
+    fprintf(stderr, "failed to init fdm\n");
+    err = 1;
+    goto cleanup;
+  }
 
   app.display = wl_display_connect(NULL);
   if (!app.display) {
     fprintf(stderr, "Can't connect to a Wayland display\n");
-    return 1;
+    err = 1;
+    goto cleanup;
   }
 
   app.registry = wl_display_get_registry(app.display);
@@ -525,7 +587,8 @@ int main(int argc, char *argv[]) {
 
   if (!app.compositor || !app.shm || !app.wm_base) {
     fprintf(stderr, "Compositor lacks wl_compositor, wl_shm or xdg_wm_base\n");
-    return 1;
+    err = 1;
+    goto cleanup;
   }
 
   app.surface = wl_compositor_create_surface(app.compositor);
@@ -535,37 +598,34 @@ int main(int argc, char *argv[]) {
   xdg_toplevel_add_listener(app.toplevel, &toplevel_listener, &app);
   xdg_toplevel_set_title(app.toplevel, "Hello Wayland");
   wl_surface_commit(app.surface); /* empty commit -> triggers first configure */
-  int err = 0;
+
+  int32_t display_fd = wl_display_get_fd(app.display);
+  if (fdm_add(&app.fdm, display_fd,
+              EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP,
+              &app, handle_display_events, 0) != 0) {
+    fprintf(stderr, "failed to add fd to fdm\n");
+    err = 1;
+    goto cleanup;
+  }
+
   while (app.running) {
-    if (wl_display_dispatch(app.display) == -1) {
-      err = wl_display_get_error(app.display);
-
-      if (err == EPROTO) {
-        // It was a Wayland protocol violation
-        const struct wl_interface *interface;
-        uint32_t id;
-        uint32_t code =
-            wl_display_get_protocol_error(app.display, &interface, &id);
-
-        fprintf(
-            stderr,
-            "Fatal Protocol Error: Interface %s, Object ID %u, Error Code %u\n",
-            interface != NULL ? interface->name : "unknown", id, code);
-      } else {
-        // It was a system/socket error (e.g., EPIPE, ECONNRESET)
-        fprintf(stderr, "Fatal Socket Error: %s\n", strerror(err));
-      }
-
-      break;
+    wl_display_prepare_read(app.display);
+    wl_display_flush(app.display);
+    if (fdm_wait(&app.fdm) != 0) {
+      wl_display_cancel_read(app.display);
+      perror("epoll");
+      err = errno;
+      goto cleanup;
     }
 
     if (app.errcode != 0) {
       lm10_perror(app.errcode);
       err = app.errcode;
-      break;
+      goto cleanup;
     }
-  };
+  }
 
+cleanup:
   xkb_context_unref(app.xkb_ctx);
   seat_free(&app.seat);
 

@@ -2,8 +2,25 @@
 #define LM_FDM_H
 
 #include <stdint.h>
+#include <sys/epoll.h>
 
 struct fdm;
+
+struct fdmdata {
+  uint32_t key; // fd
+  struct {
+    void *data;
+    uint32_t flags;
+    int32_t (*cb)(struct fdm *, void *);
+    struct epoll_event epev;
+  } value;
+};
+
+struct fdm {
+  uint32_t epfd;
+  struct fdmdata *hm;
+};
+
 enum fdm_add_flag { FDM_AUTOCLOSE = 1 << 10 };
 
 int fdm_init(struct fdm *fdm);

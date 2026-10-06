@@ -6,21 +6,6 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 
-struct fdmdata {
-  uint32_t key; // fd
-  struct {
-    void *data;
-    uint32_t flags;
-    int32_t (*cb)(struct fdm *, void *);
-    struct epoll_event epev;
-  } value;
-};
-
-struct fdm {
-  uint32_t epfd;
-  struct fdmdata *hm;
-};
-
 int fdm_init(struct fdm *fdm) {
   int epfd = epoll_create1(0);
   if (epfd == -1) {
