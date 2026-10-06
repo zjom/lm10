@@ -7,7 +7,7 @@ project(
 )
 
 incdir = include_directories('include')
-srcs = files('main.c', 'fdm.c')
+srcs = files('src/main.c', 'src/fdm.c', 'src/draw.c')
 
 wayland_client = dependency('wayland-client')
 wayland_protocols = dependency('wayland-protocols')
