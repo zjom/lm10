@@ -59,6 +59,7 @@ void fdm_remove(struct fdm *fdm, uint32_t fd) {
   if (item->value.flags & FDM_AUTOCLOSE) {
     close(fd);
   }
+  hmdel(fdm->hm, fd);
 }
 
 int fdm_wait(struct fdm *fdm) {
