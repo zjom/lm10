@@ -80,7 +80,7 @@ int fdm_wait(struct fdm *fdm) {
       continue;
     }
 
-    if (item->value.cb(fdm, item->value.data) == -1) {
+    if (item->value.cb(fdm, item->value.data) != 0) {
       return -1;
     }
   }
