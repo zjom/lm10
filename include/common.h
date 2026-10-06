@@ -1,53 +1,37 @@
 #ifndef LM_COMMON_H
 #define LM_COMMON_H
 
-#include <stddef.h>
-#include <stdlib.h>
-#include <string.h>
-
-struct strlist {
-  size_t len;
-  size_t cap;
-  char **items;
+enum lm_err {
+  LM_OK = 0,
+  LM_ERR_UNKNOWN_KEYMAP_FORMAT = -1,
+  LM_ERR_KEYMAP_COMPILE_FAILED = -2,
+  LM_ERR_KEY_EVENT_NO_KEYMAP = -3,
+  LM_ERR_FAILED_CREATE_STATE_FROM_KEYMAP = -4,
+  LM_ERR_MMAP = -5,
+  LM_ERR_SHM = -6,
+  LM_ERR_CAIRO = -7,
 };
 
-static void strlist_init(struct strlist *sl) {
-  sl->cap = 0;
-  sl->len = 0;
-  sl->items = NULL;
-}
-
-static int strlist_resize(struct strlist *sl) {
-  size_t new_cap = sl->cap ? sl->cap * 2 : 8;
-  char **tmp = realloc(sl->items, new_cap * sizeof(*tmp));
-  if (!tmp)
-    return -1;
-  sl->items = tmp;
-  sl->cap = new_cap;
-  return 0;
-}
-
-static int strlist_push(struct strlist *sl, const char *s) {
-  if (sl->len == sl->cap) {
-    if (strlist_resize(sl)) {
-      return -1;
-    }
+static inline const char *lm_strerror(enum lm_err code) {
+  switch (code) {
+  case LM_OK:
+    return "no error";
+  case LM_ERR_UNKNOWN_KEYMAP_FORMAT:
+    return "unknown keymap format";
+  case LM_ERR_KEYMAP_COMPILE_FAILED:
+    return "failed to compile keymap";
+  case LM_ERR_KEY_EVENT_NO_KEYMAP:
+    return "received key event when no keymap registered";
+  case LM_ERR_FAILED_CREATE_STATE_FROM_KEYMAP:
+    return "xkb failed to create state from keymap";
+  case LM_ERR_MMAP:
+    return "mmap error";
+  case LM_ERR_SHM:
+    return "shm error";
+  case LM_ERR_CAIRO:
+    return "cairo error";
   }
-  size_t n = strlen(s) + 1;
-  char *copy = malloc(n);
-  if (!copy)
-    return -1;
-  memcpy(copy, s, n);
-  sl->items[sl->len++] = copy;
-  return 0;
-}
-
-static void strlist_free(struct strlist *sl) {
-  for (size_t i = 0; i < sl->len; i++) {
-    free(sl->items[i]);
-  }
-  free(sl->items);
-  strlist_init(sl);
+  return "unknown error";
 }
 
 #endif // !LM_COMMON_H

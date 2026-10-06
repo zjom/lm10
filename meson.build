@@ -6,8 +6,19 @@ project(
   default_options: ['warning_level=2', 'buildtype=debugoptimized'],
 )
 
-incdir = include_directories('include')
-srcs = files('src/main.c', 'src/fdm.c', 'src/draw.c')
+incdir = include_directories('include', 'third-party')
+add_project_arguments('-D_GNU_SOURCE', language: 'c')
+
+srcs = files(
+  'src/main.c',
+  'src/fdm.c',
+  'src/view.c',
+  'src/draw.c',
+  'src/frame.c',
+  'src/render.c',
+  'src/wayl.c',
+  'src/stb_ds.c',
+)
 
 wayland_client = dependency('wayland-client')
 wayland_protocols = dependency('wayland-protocols')
