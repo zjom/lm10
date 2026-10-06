@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-struct str_view {
+struct str_state {
   const char *s;
   size_t len;
 };
@@ -82,11 +82,11 @@ static inline ptrdiff_t str_arr_len(const struct str_arr *arr) {
   return arrlen(arr->spans);
 }
 
-/* The returned view is valid until the next push. */
-static inline struct str_view str_arr_get(const struct str_arr *arr,
-                                          ptrdiff_t i) {
+/* The returned state is valid until the next push. */
+static inline struct str_state str_arr_get(const struct str_arr *arr,
+                                           ptrdiff_t i) {
   struct str_span sp = arr->spans[i];
-  return (struct str_view){arr->arena.base + sp.off, sp.len};
+  return (struct str_state){arr->arena.base + sp.off, sp.len};
 }
 
 #endif // !INCLUDE_LM_DS_H

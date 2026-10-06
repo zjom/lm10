@@ -7,11 +7,10 @@
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/debug/lm10 a b c
  */
 #include "common.h"
-#include "ds.h"
 #include "fdm.h"
 #include "log.h"
 #include "render.h"
-#include "view.h"
+#include "state.h"
 #include "wayl.h"
 
 #include <errno.h>
@@ -22,14 +21,14 @@
 struct app {
   struct fdm fdm;
   struct wayl wayl;
-  struct view view;     // the state
+  struct state state;   // the state
   struct render render; // presents the state
   bool running;
 };
 
 static void exec_selection(void *data) {
   struct app *app = data;
-  LOG_INFO("user selected %s", view_get_selection(&app->view));
+  LOG_INFO("user selected %s", state_get_selection(&app->state));
   app->running = false;
 }
 
@@ -57,10 +56,10 @@ static void on_key(void *data, xkb_keysym_t sym, uint32_t mods) {
 
   switch (sym) {
   case XKB_KEY_n:
-    view_select_next(&app->view);
+    state_select_next(&app->state);
     break;
   case XKB_KEY_p:
-    view_select_prev(&app->view);
+    state_select_prev(&app->state);
     break;
   default:
     return;
@@ -81,10 +80,10 @@ int main(int argc, char *argv[]) {
   bool fdm_ok = false, wayl_ok = false, render_ok = false;
 
   struct app app = {.running = true};
-  view_init(&app.view);
+  state_init(&app.state);
 
   for (int i = 0; i < argc; i++) {
-    if (view_push(&app.view, argv[i], strlen(argv[i])) != 0) {
+    if (state_push(&app.state, argv[i], strlen(argv[i])) != 0) {
       LOG_FATAL("out of memory");
       err = 1;
       goto cleanup;
@@ -104,7 +103,7 @@ int main(int argc, char *argv[]) {
     goto cleanup;
   }
 
-  if (render_init(&app.render, app.wayl.shm, app.wayl.surface, &app.view) !=
+  if (render_init(&app.render, app.wayl.shm, app.wayl.surface, &app.state) !=
       0) {
     err = 1;
     goto cleanup;
@@ -146,6 +145,6 @@ cleanup:
     wayl_destroy(&app.wayl);
   if (fdm_ok)
     fdm_destroy(&app.fdm);
-  view_destroy(&app.view);
+  state_destroy(&app.state);
   return err == 0 ? 0 : 1;
 }

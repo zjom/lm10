@@ -15,7 +15,7 @@ void draw_ctx_destroy(struct draw_ctx *dc) {
   *dc = (struct draw_ctx){0};
 }
 
-static void measure(const struct view *v, struct draw_ctx *dc,
+static void measure(const struct state *v, struct draw_ctx *dc,
                     PangoLayout *layout) {
   size_t n = str_arr_len(&v->items);
   int max_w = 0, line_h = 0;
@@ -33,7 +33,7 @@ static void measure(const struct view *v, struct draw_ctx *dc,
   dc->measured_gen = v->gen;
 }
 
-void draw(const struct view *v, struct draw_ctx *dc, cairo_t *cr, int w,
+void draw(const struct state *v, struct draw_ctx *dc, cairo_t *cr, int w,
           int h) {
   /* Buffers are reused, so clear first (black, as a fresh memfd was). */
   cairo_set_source_rgb(cr, 0, 0, 0);

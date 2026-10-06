@@ -12,7 +12,7 @@ add_project_arguments('-D_GNU_SOURCE', language: 'c')
 srcs = files(
   'src/main.c',
   'src/fdm.c',
-  'src/view.c',
+  'src/state.c',
   'src/draw.c',
   'src/frame.c',
   'src/render.c',

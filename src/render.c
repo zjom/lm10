@@ -54,7 +54,7 @@ static int try_present(struct render *r) {
     return r->err != LM_OK ? -1 : 0;
 
   cairo_t *cr = cairo_create(f->cs);
-  draw(r->view, &r->dctx, cr, f->width, f->height);
+  draw(r->state, &r->dctx, cr, f->width, f->height);
   cairo_destroy(cr);
   cairo_surface_flush(f->cs);
 
@@ -70,8 +70,8 @@ static int try_present(struct render *r) {
 }
 
 int render_init(struct render *r, struct wl_shm *shm,
-                struct wl_surface *surface, const struct view *view) {
-  *r = (struct render){.surface = surface, .shm = shm, .view = view};
+                struct wl_surface *surface, const struct state *state) {
+  *r = (struct render){.surface = surface, .shm = shm, .state = state};
   if (draw_ctx_init(&r->dctx) != 0) {
     LOG_ERROR("failed to create font description");
     return -1;
