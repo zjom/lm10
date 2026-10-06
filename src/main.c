@@ -7,6 +7,8 @@
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/lm10
  */
 #define _GNU_SOURCE
+#include "common.h"
+#include "draw.h"
 #include "fdm.h"
 #include "glib-object.h"
 #include "log.h"
@@ -36,50 +38,6 @@
 
 #define STB_DS_IMPLEMENTATION
 #include "stb_ds.h"
-
-struct strlist {
-  size_t len;
-  size_t cap;
-  char **items;
-};
-void strlist_init(struct strlist *sl) {
-  sl->cap = 0;
-  sl->len = 0;
-  sl->items = NULL;
-}
-
-int strlist_resize(struct strlist *sl) {
-  size_t new_cap = sl->cap ? sl->cap * 2 : 8;
-  char **tmp = realloc(sl->items, new_cap * sizeof(*tmp));
-  if (!tmp)
-    return -1;
-  sl->items = tmp;
-  sl->cap = new_cap;
-  return 0;
-}
-
-int strlist_push(struct strlist *sl, const char *s) {
-  if (sl->len == sl->cap) {
-    if (strlist_resize(sl)) {
-      return -1;
-    }
-  }
-  size_t n = strlen(s) + 1;
-  char *copy = malloc(n);
-  if (!copy)
-    return -1;
-  memcpy(copy, s, n);
-  sl->items[sl->len++] = copy;
-  return 0;
-}
-
-void strlist_free(struct strlist *sl) {
-  for (size_t i = 0; i < sl->len; i++) {
-    free(sl->items[i]);
-  }
-  free(sl->items);
-  strlist_init(sl);
-}
 
 enum lm10error {
   LM_ERR_UNKNOWN_KEYMAP_FORMAT = -1,
@@ -145,10 +103,15 @@ struct app {
   struct xkb_context *xkb_ctx;
   struct seat seat;
   struct fdm fdm;
-  int width, height;
+
+  struct wl_callback *frame_cb; // non-NULL means a frame callback is pending
+  int width, height, scale;     // configured logical size
+  struct frame frames[2];
+  struct view view;       // the state
+  struct render_ctx rctx; // cached render resources
+
   bool running;
   enum lm10error errcode;
-  struct strlist *items;
 };
 
 /* ---- shared-memory buffer ---- */
@@ -209,25 +172,48 @@ static struct wl_buffer *draw_frame(struct app *app) {
   pango_layout_set_font_description(layout, font);
   pango_font_description_free(font);
 
-  GString *s = g_string_new(NULL);
-  for (size_t i = 0; i < app->items->len; i++) {
-    if (i)
-      g_string_append_c(s, '\n');
-    g_string_append(s, app->items->items[i]);
-  }
-  pango_layout_set_text(layout, s->str, -1);
-  g_string_free(s, TRUE);
+  const double pad_x = 16, pad_y = 8; // panel padding
+  const double row_pad = 6;           // vertical padding inside each row
+  size_t n = app->view.items->len;
 
-  int tw, th;
-  pango_layout_get_pixel_size(layout, &tw, &th);
+  /* Pass 1: measure */
+  int max_w = 0, line_h = 0;
+  for (size_t i = 0; i < n; i++) {
+    int lw, lh;
+    pango_layout_set_text(layout, app->view.items->items[i], -1);
+    pango_layout_get_pixel_size(layout, &lw, &lh);
+    if (lw > max_w)
+      max_w = lw;
+    if (lh > line_h)
+      line_h = lh;
+  }
+  double row_h = line_h + 2 * row_pad;
+  double tw = max_w, th = row_h * n;
   double tx = (w - tw) / 2.0, ty = (h - th) / 2.0;
+
+  /* Panel background */
   cairo_set_source_rgba(cr, 1, 1, 1, 0.5);
-  cairo_rectangle(cr, tx - 16, ty - 8, tw + 32, th + 16);
+  cairo_rectangle(cr, tx - pad_x, ty - pad_y, tw + 2 * pad_x, th + 2 * pad_y);
   cairo_fill(cr);
 
-  cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);
-  cairo_move_to(cr, tx, ty);
-  pango_cairo_show_layout(cr, layout);
+  /* Pass 2: draw rows */
+  for (size_t i = 0; i < n; i++) {
+    double ry = ty + i * row_h;
+    int selected = (i == app->view.selected);
+
+    if (selected) {
+      cairo_set_source_rgb(cr, 0.20, 0.45, 0.90); // highlight bg
+      cairo_rectangle(cr, tx - pad_x, ry, tw + 2 * pad_x, row_h);
+      cairo_fill(cr);
+      cairo_set_source_rgb(cr, 1, 1, 1); // selected text
+    } else {
+      cairo_set_source_rgb(cr, 0.1, 0.1, 0.1); // normal text
+    }
+
+    pango_layout_set_text(layout, app->view.items->items[i], -1);
+    cairo_move_to(cr, tx, ry + row_pad);
+    pango_cairo_show_layout(cr, layout);
+  }
 
   g_object_unref(layout);
   cairo_destroy(cr);
@@ -293,14 +279,32 @@ static void seat_handle_keypress(struct seat *seat, xkb_keycode_t keycode) {
                                    XKB_STATE_MODS_EFFECTIVE) > 0) {
     switch (xkb_state_key_get_one_sym(seat->kbd.xkb_state, keycode)) {
     case XKB_KEY_n:
-      printf("C-n\n");
+      printf("C-n prev: %zu\n", seat->app->view.selected);
+      seat->app->view.selected =
+          seat->app->view.selected == seat->app->view.items->len - 1
+              ? 0
+              : seat->app->view.selected + 1;
+      printf("C-n now: %zu\n", seat->app->view.selected);
       break;
     case XKB_KEY_p:
-      printf("C-p\n");
+      printf("C-p prev: %zu\n", seat->app->view.selected);
+      seat->app->view.selected = seat->app->view.selected == 0
+                                     ? seat->app->view.items->len - 1
+                                     : seat->app->view.selected - 1;
+      printf("C-p now: %zu\n", seat->app->view.selected);
       break;
     default:
       break;
     }
+
+    struct wl_buffer *buf = draw_frame(seat->app);
+    if (!buf) {
+      seat->app->running = false;
+      return;
+    }
+    wl_surface_attach(seat->app->surface, buf, 0, 0);
+    wl_surface_damage_buffer(seat->app->surface, 0, 0, INT32_MAX, INT32_MAX);
+    wl_surface_commit(seat->app->surface);
   }
 }
 
@@ -651,12 +655,9 @@ int main(int argc, char *argv[]) {
 
   struct strlist items;
   strlist_init(&items);
-  struct app app = {
-      .width = 640,
-      .height = 480,
-      .running = true,
-      .items = &items,
-  };
+  struct view view = {.items = &items, .selected = 0, .gen = 0};
+
+  struct app app = {.width = 640, .height = 480, .running = true, .view = view};
   seat_init(&app.seat, &app);
 
   for (int i = 0; i < argc; i++) {
@@ -771,7 +772,7 @@ cleanup:
   wl_registry_destroy(app.registry);
 
   wl_display_disconnect(app.display);
-  strlist_free(app.items);
+  strlist_free(app.view.items);
   fdm_destroy(&app.fdm);
   return err == 0 ? 0 : 1;
 }
