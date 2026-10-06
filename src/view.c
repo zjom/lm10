@@ -34,3 +34,7 @@ void view_select_prev(struct view *view) {
   view->selected = view->selected == 0 ? n - 1 : view->selected - 1;
   view->gen++;
 }
+
+const char *view_get_selection(struct view *view) {
+  return str_arr_get(&view->items, view->selected).s;
+}

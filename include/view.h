@@ -21,5 +21,5 @@ void view_destroy(struct view *view);
 int view_push(struct view *view, const char *s, size_t len);
 void view_select_next(struct view *view);
 void view_select_prev(struct view *view);
-
+const char *view_get_selection(struct view *view);
 #endif // !LM_VIEW_H

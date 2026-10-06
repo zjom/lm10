@@ -7,6 +7,7 @@
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/debug/lm10 a b c
  */
 #include "common.h"
+#include "ds.h"
 #include "fdm.h"
 #include "log.h"
 #include "render.h"
@@ -26,6 +27,12 @@ struct app {
   bool running;
 };
 
+static void exec_selection(void *data) {
+  struct app *app = data;
+  LOG_INFO("user selected %s", view_get_selection(&app->view));
+  app->running = false;
+}
+
 /* ---- wayl callbacks ---- */
 
 static void on_configure(void *data, int w, int h) {
@@ -42,8 +49,11 @@ static void on_close(void *data) {
 
 static void on_key(void *data, xkb_keysym_t sym, uint32_t mods) {
   struct app *app = data;
-  if (!(mods & WAYL_MOD_CTRL))
-    return;
+  if (!(mods & WAYL_MOD_CTRL)) {
+    if (sym == XKB_KEY_Return) {
+      exec_selection(app);
+    }
+  }
 
   switch (sym) {
   case XKB_KEY_n:
