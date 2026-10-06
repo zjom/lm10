@@ -6,6 +6,8 @@ project(
   default_options: ['warning_level=2', 'buildtype=debugoptimized'],
 )
 
+incdir = include_directories('include')
+
 wayland_client = dependency('wayland-client')
 wayland_protocols = dependency('wayland-protocols')
 wayland_scanner = find_program(
@@ -33,6 +35,7 @@ executable(
   'main.c',
   xdg_shell_code,
   xdg_shell_header,
+  include_directories: incdir,
   dependencies: [wayland_client, dependency('pangocairo'), dependency('xkbcommon')],
   install: true,
 )
