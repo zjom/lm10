@@ -7,9 +7,9 @@
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/lm10
  */
 #define _GNU_SOURCE
-
 #include "fdm.h"
 #include "glib-object.h"
+#include "log.h"
 #include "pango/pango-font.h"
 #include "pango/pango-layout.h"
 #include "xdg-shell-client-protocol.h"
@@ -25,6 +25,7 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
+#include <sys/timerfd.h>
 #include <unistd.h>
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
@@ -88,38 +89,32 @@ enum lm10error {
   LM_ERR_MMAP = -5,
   LM_ERR_SHM = -6,
 };
-static void lm10_perror(enum lm10error code) {
+static char *lm10_strerror(enum lm10error code) {
   switch (code) {
   case LM_ERR_UNKNOWN_KEYMAP_FORMAT:
-    fprintf(stderr, "unknown keymap format\n");
-    break;
+    return "unknown keymap format\n";
   case LM_ERR_KEYMAP_COMPILE_FAILED:
-    fprintf(stderr, "failed to compile keymap\n");
-    break;
+    return "failed to compile keymap\n";
   case LM_ERR_KEY_EVENT_NO_KEYMAP:
-    fprintf(stderr, "received key event when no keymap registered\n");
-    break;
+    return "received key event when no keymap registered\n";
   case LM_ERR_FAILED_CREATE_STATE_FROM_KEYMAP:
-    fprintf(stderr, "xkb failed to create state from keymap\n");
-    break;
+    return "xkb failed to create state from keymap\n";
   case LM_ERR_MMAP:
-    fprintf(stderr, "mmap error\n");
-    break;
+    return "mmap error\n";
   case LM_ERR_SHM:
-    fprintf(stderr, "shm error\n");
-    break;
+    return "shm error\n";
   default:
-    fprintf(stderr, "unknown error\n");
-    break;
+    return "unknown error\n";
   }
 }
 
 struct app;
 
 struct repeat {
-  int32_t rate;
-  int32_t delay;
-  // timer
+  int32_t rate;      /* repeats per second; 0 = disabled */
+  int32_t delay;     /* ms before the first repeat */
+  int fd;            /* timerfd, -1 if not created yet */
+  xkb_keycode_t key; /* XKB keycode (evdev + 8) being repeated, 0 = none */
 };
 
 struct seat {
@@ -155,30 +150,6 @@ struct app {
   enum lm10error errcode;
   struct strlist *items;
 };
-
-static void seat_free(struct seat *s) {
-  free(s->name);
-  s->name = NULL;
-  s->wl_name = 0;
-
-  s->app = NULL;
-
-  if (s->wl_kbd != NULL) {
-    wl_keyboard_release(s->wl_kbd);
-    s->wl_kbd = NULL;
-    s->kbd.serial = 0;
-    xkb_keymap_unref(s->kbd.xkb_keymap);
-    s->kbd.xkb_keymap = NULL;
-    xkb_state_unref(s->kbd.xkb_state);
-    s->kbd.xkb_state = NULL;
-  }
-
-  if (s->wl_seat != NULL) {
-    wl_seat_get_version(s->wl_seat) >= 5 ? wl_seat_release(s->wl_seat)
-                                         : wl_seat_destroy(s->wl_seat);
-    s->wl_seat = NULL;
-  }
-}
 
 /* ---- shared-memory buffer ---- */
 
@@ -317,12 +288,180 @@ static const struct xdg_toplevel_listener toplevel_listener = {
 
 /* ---- seat listener ---- */
 
+static void seat_handle_keypress(struct seat *seat, xkb_keycode_t keycode) {
+  if (xkb_state_mod_name_is_active(seat->kbd.xkb_state, XKB_MOD_NAME_CTRL,
+                                   XKB_STATE_MODS_EFFECTIVE) > 0) {
+    switch (xkb_state_key_get_one_sym(seat->kbd.xkb_state, keycode)) {
+    case XKB_KEY_n:
+      printf("C-n\n");
+      break;
+    case XKB_KEY_p:
+      printf("C-p\n");
+      break;
+    default:
+      break;
+    }
+  }
+}
+
+static struct timespec ns_to_timespec(int64_t ns) {
+  return (struct timespec){.tv_sec = ns / 1000000000,
+                           .tv_nsec = ns % 1000000000};
+}
+
+static void repeat_stop(struct seat *seat) {
+  struct repeat *r = &seat->kbd.repeat;
+  r->key = 0;
+  if (r->fd < 0)
+    return;
+
+  struct itimerspec ts = {0}; /* all zero = disarm */
+  if (timerfd_settime(r->fd, 0, &ts, NULL) == -1)
+    LOG_WARN("failed to disarm repeat timer: %s", strerror(errno));
+}
+
+static int32_t handle_key_repeat_ready(struct fdm *fdm, void *data);
+
+static bool repeat_ensure_fd(struct seat *seat) {
+  struct repeat *r = &seat->kbd.repeat;
+  if (r->fd >= 0)
+    return true;
+
+  int fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
+  if (fd < 0) {
+    LOG_WARN("failed to create timerfd: %s", strerror(errno));
+    return false;
+  }
+  if (fdm_add(&seat->app->fdm, fd, EPOLLIN, seat, handle_key_repeat_ready,
+              FDM_AUTOCLOSE) != 0) {
+    LOG_WARN("failed to add timerfd to fdm");
+    close(fd);
+    return false;
+  }
+  r->fd = fd;
+  return true;
+}
+
+static void repeat_start(struct seat *seat, xkb_keycode_t keycode) {
+  struct repeat *r = &seat->kbd.repeat;
+  if (r->rate <= 0) /* compositor disabled key repeat */
+    return;
+  if (!repeat_ensure_fd(seat))
+    return;
+
+  int64_t delay_ns = (int64_t)r->delay * 1000000;
+  if (delay_ns <= 0)
+    delay_ns = 1; /* all-zero it_value would disarm the timer */
+
+  struct itimerspec ts = {
+      .it_value = ns_to_timespec(delay_ns),
+      .it_interval = ns_to_timespec(1000000000 / r->rate),
+  };
+  if (timerfd_settime(r->fd, 0, &ts, NULL) == -1) {
+    LOG_WARN("failed to arm repeat timer: %s", strerror(errno));
+    return;
+  }
+  r->key = keycode;
+}
+
+static void seat_init(struct seat *s, struct app *app) {
+  *s = (struct seat){
+      .app = app,
+      .kbd.repeat = {.fd = -1},
+  };
+}
+
+/* Tear down the wl_keyboard and its xkb state. The repeat timerfd is kept
+ * (just disarmed) so it can be reused if a keyboard comes back. */
+static void seat_keyboard_destroy(struct seat *s) {
+  repeat_stop(s);
+
+  if (s->wl_kbd != NULL) {
+    if (wl_keyboard_get_version(s->wl_kbd) >= WL_KEYBOARD_RELEASE_SINCE_VERSION)
+      wl_keyboard_release(s->wl_kbd);
+    else
+      wl_keyboard_destroy(s->wl_kbd);
+    s->wl_kbd = NULL;
+  }
+
+  xkb_state_unref(s->kbd.xkb_state);
+  s->kbd.xkb_state = NULL;
+  xkb_keymap_unref(s->kbd.xkb_keymap);
+  s->kbd.xkb_keymap = NULL;
+  s->kbd.serial = 0;
+}
+
+static void seat_destroy(struct seat *s) {
+  seat_keyboard_destroy(s);
+
+  if (s->kbd.repeat.fd >= 0)
+    fdm_remove(&s->app->fdm, s->kbd.repeat.fd); /* FDM_AUTOCLOSE closes it */
+
+  if (s->wl_seat != NULL) {
+    if (wl_seat_get_version(s->wl_seat) >= WL_SEAT_RELEASE_SINCE_VERSION)
+      wl_seat_release(s->wl_seat);
+    else
+      wl_seat_destroy(s->wl_seat);
+  }
+
+  free(s->name);
+}
+
+static int32_t handle_key_repeat_ready(struct fdm *fdm, void *data) {
+  (void)fdm;
+  struct seat *seat = data;
+  uint64_t expcount = 0;
+
+  ssize_t n = read(seat->kbd.repeat.fd, &expcount, sizeof expcount);
+  if (n != sizeof expcount) {
+    if (n == -1 && errno != EAGAIN)
+      LOG_WARN("failed to read repeat timer: %s", strerror(errno));
+    return 0;
+  }
+
+  if (seat->kbd.repeat.key == 0 || seat->kbd.xkb_state == NULL)
+    return 0;
+
+  for (uint64_t i = 0; i < expcount; i++)
+    seat_handle_keypress(seat, seat->kbd.repeat.key);
+  return 0;
+}
+
 static void keyboard_handle_repeat(void *data, struct wl_keyboard *wl_keyboard,
                                    int32_t rate, int32_t delay) {
-  (void)data;
   (void)wl_keyboard;
-  (void)rate;
-  (void)delay;
+  struct seat *seat = data;
+
+  seat->kbd.repeat.rate = rate;
+  seat->kbd.repeat.delay = delay;
+  if (rate <= 0)
+    repeat_stop(seat);
+}
+
+static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
+                                uint32_t serial, uint32_t time, uint32_t key,
+                                uint32_t state) {
+  (void)wl_keyboard;
+  (void)time;
+  struct seat *seat = data;
+  seat->kbd.serial = serial;
+
+  if (seat->kbd.xkb_state == NULL) {
+    seat->app->errcode = LM_ERR_KEY_EVENT_NO_KEYMAP;
+    return;
+  }
+
+  xkb_keycode_t keycode = key + 8; /* evdev -> XKB */
+
+  if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+    seat_handle_keypress(seat, keycode);
+    /* Modifiers etc. don't repeat and must not hijack an active repeat. */
+    if (xkb_keymap_key_repeats(seat->kbd.xkb_keymap, keycode))
+      repeat_start(seat, keycode);
+  } else if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
+    if (keycode == seat->kbd.repeat.key)
+      repeat_stop(seat);
+  }
 }
 
 static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
@@ -367,37 +506,6 @@ static void keyboard_handle_keymap(void *data, struct wl_keyboard *wl_keyboard,
   seat->kbd.xkb_state = xkb_state;
 }
 
-static void keyboard_handle_key(void *data, struct wl_keyboard *wl_keyboard,
-                                uint32_t serial, uint32_t time, uint32_t key,
-                                uint32_t state) {
-  struct seat *seat = data;
-  (void)wl_keyboard;
-  (void)serial;
-  (void)time;
-
-  if (seat->kbd.xkb_state == NULL) {
-    seat->app->errcode = LM_ERR_KEY_EVENT_NO_KEYMAP;
-    return;
-  }
-  bool ctrl_active = xkb_state_mod_name_is_active(
-      seat->kbd.xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE);
-  if (state == WL_KEYBOARD_KEY_STATE_PRESSED && ctrl_active) {
-    xkb_keysym_t keysym =
-        xkb_state_key_get_one_sym(seat->kbd.xkb_state, key + 8);
-
-    switch (keysym) {
-    case XKB_KEY_n:
-      printf("C-n\n");
-      break;
-    case XKB_KEY_p:
-      printf("C-p\n");
-      break;
-    default:
-      return;
-    }
-  }
-}
-
 static void keyboard_handle_enter(void *data, struct wl_keyboard *wl_keyboard,
                                   uint32_t serial, struct wl_surface *surface,
                                   struct wl_array *keys) {
@@ -411,6 +519,7 @@ static void keyboard_handle_leave(void *data, struct wl_keyboard *wl_keyboard,
                                   uint32_t serial, struct wl_surface *surface) {
   struct seat *seat = data;
   seat->kbd.serial = 0;
+  repeat_stop(seat);
   (void)wl_keyboard;
   (void)serial;
   (void)surface;
@@ -460,16 +569,7 @@ static void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
     }
   } else {
     if (seat->wl_kbd != NULL) {
-      wl_keyboard_get_version(seat->wl_kbd) >= 3
-          ? wl_keyboard_release(seat->wl_kbd)
-          : wl_keyboard_destroy(seat->wl_kbd);
-      seat->wl_kbd = NULL;
-      xkb_state_unref(seat->kbd.xkb_state);
-      seat->kbd.xkb_state = NULL;
-      xkb_keymap_unref(seat->kbd.xkb_keymap);
-      seat->kbd.xkb_keymap = NULL;
-
-      seat->kbd.serial = 0;
+      seat_keyboard_destroy(seat);
     }
   }
 }
@@ -490,12 +590,11 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
     app->wm_base = wl_registry_bind(reg, name, &xdg_wm_base_interface, 1);
     xdg_wm_base_add_listener(app->wm_base, &wm_base_listener, app);
   } else if (strcmp(iface, wl_seat_interface.name) == 0) {
-    seat_free(&app->seat);
+    seat_destroy(&app->seat);
+    seat_init(&app->seat, app);
     app->seat.wl_seat =
         wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 5));
     app->seat.wl_name = name;
-    app->seat.app = app;
-
     wl_seat_add_listener(app->seat.wl_seat, &seat_listener, &app->seat);
   }
 }
@@ -510,40 +609,41 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
+/* true between a successful wl_display_prepare_read() and its matching
+ * wl_display_read_events() / wl_display_cancel_read(). */
+static bool display_read_prepared = false;
+
+static int report_display_error(struct wl_display *display) {
+  int err = wl_display_get_error(display);
+
+  if (err == EPROTO) {
+    const struct wl_interface *interface = NULL;
+    uint32_t id = 0;
+    uint32_t code = wl_display_get_protocol_error(display, &interface, &id);
+    LOG_FATAL("Fatal Protocol Error: Interface %s, Object ID %u, Error Code %u",
+              interface != NULL ? interface->name : "unknown", id, code);
+  } else {
+    LOG_FATAL("Fatal Socket Error: %s", strerror(err ? err : errno));
+  }
+  return err ? err : 1;
+}
+
 static int32_t handle_display_events(struct fdm *fdm, void *data) {
   (void)fdm;
   struct app *app = data;
-  int err = 0;
 
-  if (wl_display_read_events(app->display) != -1) {
-    err = wl_display_get_error(app->display);
-    printf("failed to read display events");
-    return err;
-  }
+  if (!display_read_prepared)
+    return 0; /* not a reader right now; main loop will prepare again */
 
-  if (wl_display_dispatch_pending(app->display) != -1) {
-    err = wl_display_get_error(app->display);
+  display_read_prepared = false; /* consumed by read_events below */
+  if (wl_display_read_events(app->display) == -1)
+    return report_display_error(app->display);
 
-    if (err == EPROTO) {
-      // It was a Wayland protocol violation
-      const struct wl_interface *interface;
-      uint32_t id;
-      uint32_t code =
-          wl_display_get_protocol_error(app->display, &interface, &id);
+  /* read_events only queues events; they still need dispatching. */
+  if (wl_display_dispatch_pending(app->display) == -1)
+    return report_display_error(app->display);
 
-      fprintf(stderr,
-              "Fatal Protocol Error: Interface %s, Object ID %u, Error "
-              "Code %u\n",
-              interface != NULL ? interface->name : "unknown", id, code);
-    } else {
-      // It was a system/socket error (e.g., EPIPE, ECONNRESET)
-      fprintf(stderr, "Fatal Socket Error: %s\n", strerror(err));
-    }
-
-    return err;
-  }
-
-  return err;
+  return 0;
 }
 
 int main(int argc, char *argv[]) {
@@ -551,32 +651,34 @@ int main(int argc, char *argv[]) {
 
   struct strlist items;
   strlist_init(&items);
-  for (int i = 0; i < argc; i++) {
-    strlist_push(&items, argv[i]);
-  }
-  struct xkb_context *xkb_ctx = xkb_context_new(0);
-  if (xkb_ctx == NULL) {
-    fprintf(stderr, "failed to create xkb context\n");
-    err = 1;
-    goto cleanup;
-  }
-
   struct app app = {
       .width = 640,
       .height = 480,
       .running = true,
       .items = &items,
-      .xkb_ctx = xkb_ctx,
   };
+  seat_init(&app.seat, &app);
+
+  for (int i = 0; i < argc; i++) {
+    strlist_push(&items, argv[i]);
+  }
+
+  app.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  if (app.xkb_ctx == NULL) {
+    LOG_FATAL("failed to create xkb context");
+    err = 1;
+    goto cleanup;
+  }
+
   if (fdm_init(&app.fdm) != 0) {
-    fprintf(stderr, "failed to init fdm\n");
+    LOG_FATAL("failed to init fdm");
     err = 1;
     goto cleanup;
   }
 
   app.display = wl_display_connect(NULL);
   if (!app.display) {
-    fprintf(stderr, "Can't connect to a Wayland display\n");
+    LOG_FATAL("Can't connect to a Wayland display");
     err = 1;
     goto cleanup;
   }
@@ -586,7 +688,7 @@ int main(int argc, char *argv[]) {
   wl_display_roundtrip(app.display); /* receive the globals */
 
   if (!app.compositor || !app.shm || !app.wm_base) {
-    fprintf(stderr, "Compositor lacks wl_compositor, wl_shm or xdg_wm_base\n");
+    LOG_FATAL("Compositor lacks wl_compositor, wl_shm or xdg_wm_base");
     err = 1;
     goto cleanup;
   }
@@ -601,33 +703,64 @@ int main(int argc, char *argv[]) {
 
   int32_t display_fd = wl_display_get_fd(app.display);
   if (fdm_add(&app.fdm, display_fd,
-              EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP,
-              &app, handle_display_events, 0) != 0) {
-    fprintf(stderr, "failed to add fd to fdm\n");
-    err = 1;
+              EPOLLIN | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP, &app,
+              handle_display_events, 0) != 0) {
+    LOG_ERROR("failed to add display fd to fdm: %s",
+              errno ? strerror(errno) : "");
+    err = errno ? errno : 1;
     goto cleanup;
   }
 
   while (app.running) {
-    wl_display_prepare_read(app.display);
-    wl_display_flush(app.display);
-    if (fdm_wait(&app.fdm) != 0) {
+    /* Drain already-queued events until we can become a reader.
+     * A failed prepare_read must NOT be paired with read/cancel. */
+    while (wl_display_prepare_read(app.display) != 0) {
+      if (wl_display_dispatch_pending(app.display) == -1) {
+        err = report_display_error(app.display);
+        goto cleanup;
+      }
+    }
+    display_read_prepared = true;
+
+    if (!app.running) { /* a dispatched event may have asked us to quit */
       wl_display_cancel_read(app.display);
-      perror("epoll");
-      err = errno;
+      display_read_prepared = false;
+      break;
+    }
+
+    if (wl_display_flush(app.display) == -1 && errno != EAGAIN) {
+      wl_display_cancel_read(app.display);
+      display_read_prepared = false;
+      err = report_display_error(app.display);
+      goto cleanup;
+    }
+
+    int wait_ret = fdm_wait(&app.fdm);
+    int wait_errno = errno;
+
+    /* If the display fd didn't fire, we are still a prepared reader.
+     * Cancel so the next iteration's prepare_read stays balanced. */
+    if (display_read_prepared) {
+      wl_display_cancel_read(app.display);
+      display_read_prepared = false;
+    }
+
+    if (wait_ret != 0) {
+      LOG_ERROR("fdm error: %s", wait_errno ? strerror(wait_errno) : "");
+      err = wait_errno ? wait_errno : 1;
       goto cleanup;
     }
 
     if (app.errcode != 0) {
-      lm10_perror(app.errcode);
+      LOG_ERROR("app error: %s", lm10_strerror(app.errcode));
       err = app.errcode;
       goto cleanup;
     }
   }
 
 cleanup:
+  seat_destroy(&app.seat);
   xkb_context_unref(app.xkb_ctx);
-  seat_free(&app.seat);
 
   xdg_toplevel_destroy(app.toplevel);
   xdg_surface_destroy(app.xdg_surface);
@@ -639,5 +772,6 @@ cleanup:
 
   wl_display_disconnect(app.display);
   strlist_free(app.items);
+  fdm_destroy(&app.fdm);
   return err == 0 ? 0 : 1;
 }
