@@ -1,4 +1,5 @@
 #include "draw.h"
+#include "ds.h"
 
 #include <glib-object.h>
 #include <pango/pangocairo.h>
@@ -17,11 +18,13 @@ void draw_ctx_destroy(struct draw_ctx *dc) {
 
 static void measure(const struct state *v, struct draw_ctx *dc,
                     PangoLayout *layout) {
-  size_t n = str_arr_len(&v->items);
+  size_t n = arrlen(v->entries);
   int max_w = 0, line_h = 0;
   for (size_t i = 0; i < n; i++) {
     int lw, lh;
-    pango_layout_set_text(layout, str_arr_get(&v->items, i).s, -1);
+    String s = state_entry_join_argv(&v->entries[i], " ");
+    pango_layout_set_text(layout, s.data, -1);
+    string_deinit(&s);
     pango_layout_get_pixel_size(layout, &lw, &lh);
     if (lw > max_w)
       max_w = lw;
@@ -60,7 +63,7 @@ void draw(const struct state *v, struct draw_ctx *dc, cairo_t *cr, int w,
 
   const double pad_x = 16, pad_y = 8; // panel padding
   const double row_pad = 6;           // vertical padding inside each row
-  size_t n = str_arr_len(&v->items);
+  size_t n = arrlen(v->entries);
 
   double row_h = dc->line_h + 2 * row_pad;
   double tw = dc->max_w, th = row_h * n;
@@ -84,7 +87,9 @@ void draw(const struct state *v, struct draw_ctx *dc, cairo_t *cr, int w,
       cairo_set_source_rgb(cr, 0.1, 0.1, 0.1); // normal text
     }
 
-    pango_layout_set_text(layout, str_arr_get(&v->items, i).s, -1);
+    String s = state_entry_join_argv(&v->entries[i], " ");
+    pango_layout_set_text(layout, s.data, -1);
+    string_deinit(&s);
     cairo_move_to(cr, tx, ry + row_pad);
     pango_cairo_show_layout(cr, layout);
   }

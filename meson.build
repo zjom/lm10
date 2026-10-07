@@ -13,6 +13,7 @@ srcs = files(
   'src/main.c',
   'src/fdm.c',
   'src/state.c',
+  'src/dlist.c',
   'src/draw.c',
   'src/frame.c',
   'src/render.c',
