@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 int fdm_init(struct fdm *fdm) {
-  int epfd = epoll_create1(0);
+  int epfd = epoll_create1(EPOLL_CLOEXEC);
   if (epfd == -1) {
     return -1;
   }
