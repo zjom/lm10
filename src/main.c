@@ -22,6 +22,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -40,7 +41,10 @@ static bool exec_selection(void *data) {
     return false;
   }
 
-  char **argv = malloc(dlist_size(&entry->argv) * sizeof(*argv));
+  bool ok = false;
+  size_t argc = dlist_size(&entry->argv);
+  /* +1 for the NULL terminator execvp requires */
+  char **argv = calloc(argc + 1, sizeof(*argv));
   if (argv == NULL) {
     return false;
   }
@@ -48,25 +52,43 @@ static bool exec_selection(void *data) {
   size_t i = 0;
   DLIST_FOREACH(&entry->argv, n) {
     argv[i] = strdup(DLIST_AT(n, String)->data);
+    if (argv[i] == NULL)
+      goto out_free_argv;
     i++;
   }
 
+  LOG_DEBUG("argv:");
+  for (size_t j = 0; argv[j] != NULL; j++)
+    LOG_DEBUG("  %zu: \"%s\"", j, argv[j]);
+
   int pipe_fds[2];
   if (pipe2(pipe_fds, O_CLOEXEC) == -1) {
-    LOG_ERROR("failed to create pipe");
-    return false;
+    LOG_ERROR("failed to create pipe %s", strerror(errno));
+    goto out_free_argv;
   }
 
   pid_t pid = fork();
   if (pid == -1) {
     close(pipe_fds[0]);
     close(pipe_fds[1]);
-    LOG_ERROR("failed to fork");
-    return false;
+    LOG_ERROR("failed to fork %s", strerror(errno));
+    goto out_free_argv;
   }
 
   if (pid == 0) {
+    /* Intermediate child */
     close(pipe_fds[0]);
+
+    pid_t gpid = fork();
+    if (gpid == -1)
+      goto child_err;
+    if (gpid > 0)
+      _exit(0); /* Grandchild gets reparented to init */
+
+    /* Grandchild: not a process group leader, so setsid() succeeds */
+    if (setsid() == -1)
+      goto child_err;
+
     int devnull_r = open("/dev/null", O_RDONLY | O_CLOEXEC);
     if (devnull_r == -1)
       goto child_err;
@@ -76,32 +98,47 @@ static bool exec_selection(void *data) {
 
     execvp(argv[0], argv);
 
-  child_err:
+  child_err: {
     /* Signal error back to parent process */
-    (void)!write(pipe_fds[1], &errno, sizeof(errno));
+    int err = errno;
+    (void)!write(pipe_fds[1], &err, sizeof(err));
     _exit(1);
-  } else {
-    /* Parent */
-    free(argv);
-    /* Close write end */
-    close(pipe_fds[1]);
-
-    int _errno;
-    static_assert(sizeof(_errno) == sizeof(errno), "errno size mismatch");
-
-    ssize_t ret = read(pipe_fds[0], &_errno, sizeof(_errno));
-    if (ret == -1)
-      LOG_ERROR("failed to read from pipe");
-    else if (ret == sizeof(_errno))
-      LOG_ERROR("failed to execute: %s", strerror(_errno));
-    else {
-      LOG_DEBUG("fork+exec succeeded");
-      app->running = false;
-    }
-
-    close(pipe_fds[0]);
-    return ret == 0;
   }
+  }
+
+  /* Parent */
+  close(pipe_fds[1]);
+
+  int child_errno;
+  static_assert(sizeof(child_errno) == sizeof(errno), "errno size mismatch");
+
+  ssize_t ret;
+  do {
+    ret = read(pipe_fds[0], &child_errno, sizeof(child_errno));
+  } while (ret == -1 && errno == EINTR);
+  close(pipe_fds[0]);
+
+  /* Reap the intermediate child */
+  while (waitpid(pid, NULL, 0) == -1 && errno == EINTR)
+    ;
+
+  if (ret == -1) {
+    LOG_ERROR("failed to read from pipe: %s", strerror(errno));
+  } else if (ret == sizeof(child_errno)) {
+    LOG_ERROR("failed to execute: %s", strerror(child_errno));
+  } else if (ret == 0) {
+    LOG_DEBUG("fork+exec succeeded");
+    app->running = false;
+    ok = true;
+  } else {
+    LOG_ERROR("short read from pipe");
+  }
+
+out_free_argv:
+  for (size_t j = 0; j < argc; j++)
+    free(argv[j]);
+  free(argv);
+  return ok;
 }
 
 /* ---- wayl callbacks ---- */
