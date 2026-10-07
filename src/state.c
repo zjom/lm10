@@ -74,5 +74,8 @@ void state_select_prev(struct state *state) {
 }
 
 const struct state_entry *state_get_selection(struct state *state) {
+  if (arrlen(state->entries) == 0) {
+    return NULL;
+  }
   return &state->entries[state->selected];
 }

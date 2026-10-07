@@ -17,8 +17,12 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 struct app {
@@ -29,12 +33,75 @@ struct app {
   bool running;
 };
 
-static void exec_selection(void *data) {
+static bool exec_selection(void *data) {
   struct app *app = data;
-  String s = state_entry_join_argv(state_get_selection(&app->state), " ");
-  LOG_INFO("user selected %s", s.data);
-  string_deinit(&s);
-  app->running = false;
+  const struct state_entry *entry = state_get_selection(&app->state);
+  if (entry == NULL) {
+    return false;
+  }
+
+  char **argv = malloc(dlist_size(&entry->argv) * sizeof(*argv));
+  if (argv == NULL) {
+    return false;
+  }
+
+  size_t i = 0;
+  DLIST_FOREACH(&entry->argv, n) {
+    argv[i] = strdup(DLIST_AT(n, String)->data);
+    i++;
+  }
+
+  int pipe_fds[2];
+  if (pipe2(pipe_fds, O_CLOEXEC) == -1) {
+    LOG_ERROR("failed to create pipe");
+    return false;
+  }
+
+  pid_t pid = fork();
+  if (pid == -1) {
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+    LOG_ERROR("failed to fork");
+    return false;
+  }
+
+  if (pid == 0) {
+    close(pipe_fds[0]);
+    int devnull_r = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    if (devnull_r == -1)
+      goto child_err;
+
+    if (dup2(devnull_r, STDIN_FILENO) == -1)
+      goto child_err;
+
+    execvp(argv[0], argv);
+
+  child_err:
+    /* Signal error back to parent process */
+    (void)!write(pipe_fds[1], &errno, sizeof(errno));
+    _exit(1);
+  } else {
+    /* Parent */
+    free(argv);
+    /* Close write end */
+    close(pipe_fds[1]);
+
+    int _errno;
+    static_assert(sizeof(_errno) == sizeof(errno), "errno size mismatch");
+
+    ssize_t ret = read(pipe_fds[0], &_errno, sizeof(_errno));
+    if (ret == -1)
+      LOG_ERROR("failed to read from pipe");
+    else if (ret == sizeof(_errno))
+      LOG_ERROR("failed to execute: %s", strerror(_errno));
+    else {
+      LOG_DEBUG("fork+exec succeeded");
+      app->running = false;
+    }
+
+    close(pipe_fds[0]);
+    return ret == 0;
+  }
 }
 
 /* ---- wayl callbacks ---- */

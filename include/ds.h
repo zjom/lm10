@@ -209,4 +209,15 @@ static inline String str_to_owned(const struct str *s) {
   return out;
 }
 
+static inline char *str_to_cstring(const struct str *s) {
+  if (s->len == 0) {
+    return NULL;
+  }
+
+  char *out = malloc(s->len + 1);
+  memcpy(out, s->data, s->len);
+  out[s->len + 1] = '\0';
+  return out;
+}
+
 #endif // INCLUDE_LM_DS_H
