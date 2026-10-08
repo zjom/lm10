@@ -45,6 +45,7 @@
 
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
+          hardeningDisable = [ "fortify" ];
           inputsFrom = [ self.packages.${pkgs.system}.default ];
           packages = with pkgs; [
             gdb
