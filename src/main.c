@@ -51,7 +51,7 @@ static bool exec_selection(void *data) {
 
   size_t i = 0;
   DLIST_FOREACH(&entry->argv, n) {
-    argv[i] = strdup(DLIST_AT(n, String)->data);
+    argv[i] = DLIST_AT(n, String)->data;
     if (argv[i] == NULL)
       goto out_free_argv;
     i++;
