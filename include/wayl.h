@@ -10,6 +10,8 @@
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 
+struct xdg_activation_v1;
+
 struct wayl;
 
 enum wayl_mod {
@@ -60,6 +62,8 @@ struct wayl {
   struct xdg_surface *xdg_surface;
   struct xdg_toplevel *toplevel;
   struct xkb_context *xkb_ctx;
+  struct wl_event_queue *xdg_activation_v1_queue;
+  struct xdg_activation_v1 *xdg_activation_v1;
   struct seat seat;
   struct fdm *fdm;
   int display_fd; // -1 until registered with fdm
@@ -89,5 +93,15 @@ void wayl_destroy(struct wayl *w);
  * display error (already logged). */
 int wayl_prepare(struct wayl *w);
 void wayl_finish(struct wayl *w);
+
+/* Synchronously grab a token from the compositor.
+ * xdg_activation_token return parameter will not be modified if:
+ * - there's no manager OR
+ * - the roundtrip fails,
+ *
+ * if strdup fails, xdg_activation_token will become NULL
+ */
+void get_xdg_activation_token(struct seat *seat, const char *app_id,
+                              char **xdg_activation_token);
 
 #endif // !LM_WAYL_H

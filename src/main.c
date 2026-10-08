@@ -34,13 +34,8 @@ struct app {
   bool running;
 };
 
-static bool exec_selection(void *data) {
-  struct app *app = data;
-  const struct state_entry *entry = state_get_selection(&app->state);
-  if (entry == NULL) {
-    return false;
-  }
-
+static bool exec_entry(const struct state_entry *entry,
+                       const char *xdg_activation_token) {
   bool ok = false;
   size_t argc = dlist_size(&entry->argv);
   /* +1 for the NULL terminator execvp requires */
@@ -79,6 +74,13 @@ static bool exec_selection(void *data) {
     close(pipe_fds[0]);
     if (setsid() == -1)
       goto child_err;
+
+    if (xdg_activation_token != NULL) {
+      /* Prepare client for xdg activation startup */
+      setenv("XDG_ACTIVATION_TOKEN", xdg_activation_token, 1);
+      /* And X11 startup notifications */
+      setenv("DESKTOP_STARTUP_ID", xdg_activation_token, 1);
+    }
 
     pid_t gpid = fork();
     if (gpid == -1)
@@ -120,7 +122,6 @@ static bool exec_selection(void *data) {
     ;
   if (ret == 0) {
     LOG_DEBUG("fork+exec succeeded");
-    app->running = false;
     ok = true;
   } else {
     if (ret == -1) {
@@ -130,11 +131,23 @@ static bool exec_selection(void *data) {
     } else {
       LOG_ERROR("short read from pipe");
     }
-    app->wayl.err = LM_ERR_EXEC;
   }
 
 out_free_argv:
   free(argv);
+  return ok;
+}
+
+static bool exec_selection(struct app *app, const struct state_entry *entry) {
+  char *xdg_activation_token = NULL;
+  get_xdg_activation_token(&app->wayl.seat, NULL, &xdg_activation_token);
+  bool ok = exec_entry(entry, xdg_activation_token);
+  if (!ok) {
+    app->wayl.err = LM_ERR_EXEC;
+  }
+  free(xdg_activation_token);
+  app->running = false;
+
   return ok;
 }
 
@@ -156,9 +169,11 @@ static void on_key(void *data, xkb_keysym_t sym, uint32_t mods) {
   struct app *app = data;
   if (!(mods & WAYL_MOD_CTRL)) {
     if (sym == XKB_KEY_Return) {
-      if (!exec_selection(app)) {
-        // TODO: handle exec failure
+      const struct state_entry *entry = state_get_selection(&app->state);
+      if (entry == NULL) {
+        return;
       }
+      exec_selection(app, entry);
       return;
     }
   }
@@ -251,6 +266,11 @@ int main(int argc, char *argv[]) {
     goto cleanup;
   }
   render_ok = true;
+
+  // we may have inherited XDG_ACTIVATION_TOKEN
+  // from launching parent process.
+  unsetenv("XDG_ACTIVATION_TOKEN");
+  unsetenv("DESKTOP_STARTUP_ID");
 
   while (app.running) {
     err = wayl_prepare(&app.wayl);

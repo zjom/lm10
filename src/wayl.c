@@ -1,6 +1,9 @@
 #include "wayl.h"
 #include "log.h"
-#include "xdg-shell-client-protocol.h"
+
+#include <xdg-activation-v1-client-protocol.h>
+#include <xdg-shell-client-protocol.h>
+#include <xkbcommon/xkbcommon-names.h>
 
 #include <assert.h>
 #include <errno.h>
@@ -10,7 +13,6 @@
 #include <sys/mman.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
-#include <xkbcommon/xkbcommon-names.h>
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -53,6 +55,15 @@ static const struct xdg_toplevel_listener toplevel_listener = {
     .configure = toplevel_configure,
     .close = toplevel_close,
 };
+
+static void token_done(void *data, struct xdg_activation_token_v1 *token,
+                       const char *name) {
+  (void)token;
+  char **xdg_activation_token = data;
+  *xdg_activation_token = strdup(name);
+}
+static const struct xdg_activation_token_v1_listener token_listener = {
+    .done = token_done};
 
 /* ---- keyboard ---- */
 
@@ -365,6 +376,11 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
         wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 5));
     w->seat.wl_name = name;
     wl_seat_add_listener(w->seat.wl_seat, &seat_listener, &w->seat);
+  } else if (strcmp(iface, xdg_activation_v1_interface.name) == 0) {
+    w->xdg_activation_v1 =
+        wl_registry_bind(reg, name, &xdg_activation_v1_interface, 1);
+    wl_proxy_set_queue((struct wl_proxy *)w->xdg_activation_v1,
+                       w->xdg_activation_v1_queue);
   }
 }
 static void registry_global_remove(void *data, struct wl_registry *reg,
@@ -440,6 +456,12 @@ int wayl_init(struct wayl *w, struct fdm *fdm,
     return -1;
   }
 
+  w->xdg_activation_v1_queue = wl_display_create_queue(w->display);
+  if (w->xdg_activation_v1_queue == NULL) {
+    LOG_ERROR("failed to create wl xdg_activation_v1 queue");
+    return -1;
+  }
+
   w->registry = wl_display_get_registry(w->display);
   wl_registry_add_listener(w->registry, &registry_listener, w);
   wl_display_roundtrip(w->display); /* receive the globals */
@@ -465,6 +487,7 @@ int wayl_init(struct wayl *w, struct fdm *fdm,
     return -1;
   }
   w->display_fd = fd;
+
   return 0;
 }
 
@@ -479,7 +502,10 @@ void wayl_destroy(struct wayl *w) {
 
   if (w->display_fd >= 0)
     fdm_remove(w->fdm, w->display_fd); /* no AUTOCLOSE: libwayland owns it */
-
+  if (w->xdg_activation_v1)
+    xdg_activation_v1_destroy(w->xdg_activation_v1);
+  if (w->xdg_activation_v1_queue)
+    wl_event_queue_destroy(w->xdg_activation_v1_queue);
   if (w->toplevel)
     xdg_toplevel_destroy(w->toplevel);
   if (w->xdg_surface)
@@ -523,4 +549,32 @@ void wayl_finish(struct wayl *w) {
     wl_display_cancel_read(w->display);
     w->read_prepared = false;
   }
+}
+
+void get_xdg_activation_token(struct seat *seat, const char *app_id,
+                              char **xdg_activation_token) {
+  struct wayl *wayl = seat->wayl;
+  if (wayl->xdg_activation_v1 == NULL) {
+    LOG_WARN("no xdg_activation_v1 manager");
+    return;
+  }
+  struct xdg_activation_token_v1 *token =
+      xdg_activation_v1_get_activation_token(wayl->xdg_activation_v1);
+
+  xdg_activation_token_v1_set_serial(token, seat->kbd.serial, seat->wl_seat);
+  xdg_activation_token_v1_set_surface(token, wayl->surface);
+
+  if (app_id != NULL)
+    xdg_activation_token_v1_set_app_id(token, app_id);
+
+  xdg_activation_token_v1_add_listener(token, &token_listener,
+                                       xdg_activation_token);
+  xdg_activation_token_v1_commit(token);
+
+  if (wl_display_roundtrip_queue(wayl->display,
+                                 wayl->xdg_activation_v1_queue) == -1) {
+    LOG_WARN("failed to get xdg activation token");
+  }
+
+  xdg_activation_token_v1_destroy(token);
 }
