@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <sys/epoll.h>
 
+#include "ztd_arr.h"
+
 struct fdm;
 
 struct fdmdata {
@@ -16,9 +18,11 @@ struct fdmdata {
   } value;
 };
 
+typedef LIST(struct fdmdata) FdmDataList;
+
 struct fdm {
   uint32_t epfd;
-  struct fdmdata* hm;
+  FdmDataList fds;
 };
 
 enum fdm_add_flag { FDM_AUTOCLOSE = 1 << 10 };

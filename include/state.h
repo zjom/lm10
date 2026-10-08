@@ -1,28 +1,26 @@
 #ifndef LM_STATE_H
 #define LM_STATE_H
 
-#include "ds.h"
+#include "ztd_arena.h"
+#include "ztd_arr.h"
+#include "ztd_str.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
 
 struct state_entry {
-  String name;
-  DList argv;  // strings
+  Str name;      // NUL-terminated, lives in the state arena
+  StrList argv;  // each Str NUL-terminated, lives in the state arena
 };
 
-struct state_entry* state_entry_init(struct state_entry* entry,
-                                     const char* name,
-                                     const DList argv);
-void state_entry_free(struct state_entry* entry);
-String state_entry_join_argv(const struct state_entry* entry, const char* sep);
+typedef LIST(struct state_entry) StateEntryList;
 
 /* The app state that gets drawn. Every mutation bumps gen so caches
  * (measurements, presented frames) can tell when they are stale. */
 struct state {
-  struct state_entry* entries;
+  Arena arena;  // owns the entries list and everything the entries point to
+  StateEntryList entries;
   size_t selected;
   uint64_t gen;
 };
@@ -30,7 +28,9 @@ struct state {
 void state_init(struct state* state);
 void state_destroy(struct state* state);
 
-void state_push(struct state* state, struct state_entry entry);
+/* argv must live in state->arena. If name is NULL, the argv joined with
+ * spaces is used. Returns false on allocation failure. */
+bool state_push(struct state* state, const char* name, StrList argv);
 void state_select_next(struct state* state);
 void state_select_prev(struct state* state);
 const struct state_entry* state_get_selection(struct state* state);

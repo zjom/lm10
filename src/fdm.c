@@ -6,7 +6,14 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 
-#include "stb_ds.h"
+static struct fdmdata* fdm__find(struct fdm* fdm, uint32_t fd) {
+  ARR_FOREACH(struct fdmdata, it, &fdm->fds) {
+    if (it->key == fd) {
+      return it;
+    }
+  }
+  return NULL;
+}
 
 int fdm_init(struct fdm* fdm) {
   int epfd = epoll_create1(EPOLL_CLOEXEC);
@@ -14,19 +21,19 @@ int fdm_init(struct fdm* fdm) {
     return -1;
   }
   fdm->epfd = epfd;
-  fdm->hm = NULL;
+  fdm->fds = (FdmDataList)LIST_INIT;
   return 0;
 }
 
 void fdm_destroy(struct fdm* fdm) {
   close(fdm->epfd);
-  for (int i = 0; i < hmlen(fdm->hm); ++i) {
-    epoll_ctl(fdm->epfd, EPOLL_CTL_DEL, fdm->hm[i].key, NULL);
-    if (fdm->hm[i].value.flags & FDM_AUTOCLOSE) {
-      close(fdm->hm[i].key);
+  ARR_FOREACH(struct fdmdata, it, &fdm->fds) {
+    epoll_ctl(fdm->epfd, EPOLL_CTL_DEL, it->key, NULL);
+    if (it->value.flags & FDM_AUTOCLOSE) {
+      close(it->key);
     }
   }
-  hmfree(fdm->hm);
+  LIST_FREE(&fdm->fds);
 }
 
 int fdm_add(struct fdm* fdm,
@@ -41,21 +48,24 @@ int fdm_add(struct fdm* fdm,
                                       .epev = {.events = events, .data.fd = fd},
                                       .flags = flags}};
 
-  int op = EPOLL_CTL_ADD;
-  if (hmgeti(fdm->hm, fd) != -1) {
-    op = EPOLL_CTL_MOD;
-  }
+  struct fdmdata* item = fdm__find(fdm, fd);
+  int op = item != NULL ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
 
   if (epoll_ctl(fdm->epfd, op, fd, &fdmdata.value.epev) == -1) {
     return -1;
   }
 
-  hmputs(fdm->hm, fdmdata);
+  if (item != NULL) {
+    *item = fdmdata;
+  } else if (!LIST_PUSH(&fdm->fds, fdmdata)) {
+    epoll_ctl(fdm->epfd, EPOLL_CTL_DEL, fd, NULL);
+    return -1;
+  }
   return 0;
 }
 
 void fdm_remove(struct fdm* fdm, uint32_t fd) {
-  struct fdmdata* item = hmgetp_null(fdm->hm, fd);
+  struct fdmdata* item = fdm__find(fdm, fd);
   if (item == NULL) {
     return;
   }
@@ -65,7 +75,7 @@ void fdm_remove(struct fdm* fdm, uint32_t fd) {
   if (item->value.flags & FDM_AUTOCLOSE) {
     close(fd);
   }
-  hmdel(fdm->hm, fd);
+  LIST_SWAP_REMOVE(&fdm->fds, (size_t)(item - fdm->fds.ptr));
 }
 
 int fdm_wait(struct fdm* fdm) {
@@ -80,7 +90,7 @@ int fdm_wait(struct fdm* fdm) {
   }
 
   for (int i = 0; i < event_count; ++i) {
-    struct fdmdata* item = hmgetp_null(fdm->hm, epoll_events[i].data.fd);
+    struct fdmdata* item = fdm__find(fdm, epoll_events[i].data.fd);
     if (item == NULL) {
       fprintf(stderr, "warning: unknown fd received from epoll\n");
       continue;

@@ -6,7 +6,7 @@
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/debug/lm10 a b c
  */
-#include <ctype.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -18,8 +18,6 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 #include "common.h"
-#include "dlist.h"
-#include "ds.h"
 #include "fdm.h"
 #include "log.h"
 #include "render.h"
@@ -37,7 +35,7 @@ struct app {
 static bool exec_entry(const struct state_entry* entry,
                        const char* xdg_activation_token) {
   bool ok = false;
-  size_t argc = dlist_size(&entry->argv);
+  size_t argc = entry->argv.len;
   /* +1 for the NULL terminator execvp requires */
   char** argv = calloc(argc + 1, sizeof(*argv));
   if (argv == NULL) {
@@ -45,8 +43,8 @@ static bool exec_entry(const struct state_entry* entry,
   }
 
   size_t i = 0;
-  DLIST_FOREACH(&entry->argv, n) {
-    argv[i] = DLIST_AT(n, String)->data;
+  ARR_FOREACH(const Str, s, &entry->argv) {
+    argv[i] = (char*)s->ptr;
     assert(argv[i] != NULL);
     i++;
   }
@@ -201,11 +199,6 @@ static const struct wayl_listener wayl_listener = {
 };
 
 /* ---- main ---- */
-static void lm__string_dlist_dtor_fn(void* data) {
-  String* s = data;
-  string_deinit(s);
-}
-
 int main(int argc, char* argv[]) {
   int err = 0;
   bool fdm_ok = false, wayl_ok = false, render_ok = false;
@@ -214,39 +207,23 @@ int main(int argc, char* argv[]) {
   state_init(&app.state);
 
   for (int i = 1; i < argc; i++) {
-    struct state_entry entry = {0};
+    StrList args = LIST_INIT_ARENA(&app.state.arena);
 
-    DList l;
-    dlist_init(&l, sizeof(String), lm__string_dlist_dtor_fn);
-
-    struct str str = str_of_cstring(argv[i]);
-    str_trim(&str, isspace);
-
-    while (str.len > 0) {
-      struct str cut = str_split_left(&str, ' ');
-      str_trim(&cut, isspace);
-      if (cut.len > 0) {
-        String cutted = str_to_owned(&cut);
-        if (cutted.len == 0) {
-          LOG_WARN("cutted allocation failed");
-          string_deinit(&cutted);
-          continue;
-        }
-        if (dlist_push_back(&l, &cutted) == NULL) {
-          LOG_WARN("dlist push back null");
-          string_deinit(&cutted);
-          continue;
-        }
+    StrSplit it = str_split(str_trim(str_from_cstr(argv[i])), STR(" "));
+    Str tok;
+    while (str_split_next(&it, &tok)) {
+      tok = str_trim(tok);
+      if (tok.len == 0) {
+        continue;  // runs of spaces yield empty fields
+      }
+      Str owned = str_arena_dup(&app.state.arena, tok);  // NUL-terminated
+      if (owned.ptr == NULL || !LIST_PUSH(&args, owned)) {
+        LOG_WARN("argument allocation failed");
       }
     }
 
-    if (dlist_size(&l)) {
-      if (state_entry_init(&entry, NULL, l) == NULL) {
-        state_entry_free(&entry);
-        LOG_WARN("entry allocation failed");
-        continue;
-      }
-      state_push(&app.state, entry);
+    if (args.len && !state_push(&app.state, NULL, args)) {
+      LOG_WARN("entry allocation failed");
     }
   }
 

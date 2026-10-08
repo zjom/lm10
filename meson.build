@@ -53,11 +53,15 @@ foreach xml : protocols
   )
 endforeach
 
-third_party_inc = include_directories('third-party', is_system: true)
+third_party_inc = include_directories(
+  'third-party',
+  'third-party/ztd',
+  is_system: true,
+)
 
 third_party_lib = static_library(
   'lm10-third-party',
-  'src/stb_ds.c',
+  'src/ztd.c',
   protocol_code,
   protocol_headers,
   include_directories: third_party_inc,
@@ -66,7 +70,6 @@ third_party_lib = static_library(
 )
 
 srcs = files(
-  'src/dlist.c',
   'src/draw.c',
   'src/fdm.c',
   'src/frame.c',
