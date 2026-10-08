@@ -195,7 +195,7 @@ int main(int argc, char *argv[]) {
   struct app app = {.running = true};
   state_init(&app.state);
 
-  for (int i = 0; i < argc; i++) {
+  for (int i = 1; i < argc; i++) {
     struct state_entry entry = {0};
 
     DList l;
