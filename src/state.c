@@ -21,7 +21,7 @@ void state_entry_free(struct state_entry *entry) {
 }
 
 String state_entry_join_argv(const struct state_entry *entry, const char *sep) {
-  String s;
+  String s = {0};
   string_init(&s);
   size_t i = 0;
   size_t len = dlist_size(&entry->argv);
