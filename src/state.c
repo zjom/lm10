@@ -9,18 +9,6 @@ void state_entry_free(struct state_entry *entry) {
   dlist_clear(&entry->argv);
 }
 
-char **state_entry_argv(const struct state_entry *entry) {
-  size_t argc = dlist_size(&entry->argv);
-  char **retv = malloc(argc * sizeof(*retv));
-  size_t i = 0;
-  DLIST_FOREACH(&entry->argv, n) {
-    retv[i] = DLIST_AT(n, String)->data;
-    i++;
-  }
-
-  return retv;
-}
-
 String state_entry_join_argv(const struct state_entry *entry, const char *sep) {
   String s;
   string_init(&s);
