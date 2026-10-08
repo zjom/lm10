@@ -224,6 +224,7 @@ int main(int argc, char *argv[]) {
 
     if (dlist_size(&l)) {
       if (state_entry_init(&entry, NULL, l) == NULL) {
+        state_entry_free(&entry);
         LOG_WARN("entry allocation failed");
         continue;
       }
