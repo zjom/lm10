@@ -179,6 +179,9 @@ static void on_key(void* data, xkb_keysym_t sym, uint32_t mods) {
   }
 
   switch (sym) {
+    case XKB_KEY_Escape:
+      app->running = false;
+      return;
     case XKB_KEY_n:
       state_select_next(&app->state);
       break;
