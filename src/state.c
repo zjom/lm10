@@ -45,6 +45,9 @@ void state_init(struct state *state) {
 }
 
 void state_destroy(struct state *state) {
+  for (int i = 0; i < arrlen(state->entries); ++i) {
+    state_entry_free(&state->entries[i]);
+  }
   arrfree(state->entries);
   state->entries = NULL;
   state->selected = 0;
