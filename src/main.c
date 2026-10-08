@@ -121,17 +121,19 @@ static bool exec_selection(void *data) {
   /* Reap the intermediate child */
   while (waitpid(pid, NULL, 0) == -1 && errno == EINTR)
     ;
-
-  if (ret == -1) {
-    LOG_ERROR("failed to read from pipe: %s", strerror(errno));
-  } else if (ret == sizeof(child_errno)) {
-    LOG_ERROR("failed to execute: %s", strerror(child_errno));
-  } else if (ret == 0) {
+  if (ret == 0) {
     LOG_DEBUG("fork+exec succeeded");
     app->running = false;
     ok = true;
   } else {
-    LOG_ERROR("short read from pipe");
+    if (ret == -1) {
+      LOG_ERROR("failed to read from pipe: %s", strerror(errno));
+    } else if (ret == sizeof(child_errno)) {
+      LOG_ERROR("failed to execute: %s", strerror(child_errno));
+    } else {
+      LOG_ERROR("short read from pipe");
+    }
+    app->wayl.err = LM_ERR_EXEC;
   }
 
 out_free_argv:
@@ -159,7 +161,10 @@ static void on_key(void *data, xkb_keysym_t sym, uint32_t mods) {
   struct app *app = data;
   if (!(mods & WAYL_MOD_CTRL)) {
     if (sym == XKB_KEY_Return) {
-      exec_selection(app);
+      if (!exec_selection(app)) {
+        LOG_ERROR("exec failed");
+      }
+      return;
     }
   }
 
