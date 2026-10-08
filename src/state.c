@@ -4,6 +4,17 @@
 
 // -- state_entry
 
+struct state_entry *state_entry_init(struct state_entry *entry,
+                                     const char *name, const DList argv) {
+  entry->argv = argv;
+  entry->name =
+      name != NULL ? string_of(name) : state_entry_join_argv(entry, " ");
+  if (entry->name.data == NULL) {
+    return NULL;
+  }
+  return entry;
+}
+
 void state_entry_free(struct state_entry *entry) {
   string_deinit(&entry->name);
   dlist_clear(&entry->argv);

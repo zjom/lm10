@@ -228,8 +228,10 @@ int main(int argc, char *argv[]) {
     }
 
     if (dlist_size(&l)) {
-      entry.argv = l;
-      entry.name = (String){.len = 0, .cap = 0, .data = NULL};
+      if (state_entry_init(&entry, NULL, l) == NULL) {
+        LOG_WARN("entry allocation failed");
+        continue;
+      }
       state_push(&app.state, entry);
     }
   }

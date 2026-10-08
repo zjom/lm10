@@ -14,8 +14,7 @@ struct state_entry {
 };
 
 struct state_entry *state_entry_init(struct state_entry *entry,
-                                     const char *name, size_t argc,
-                                     char *argv[]);
+                                     const char *name, const DList argv);
 void state_entry_free(struct state_entry *entry);
 String state_entry_join_argv(const struct state_entry *entry, const char *sep);
 
