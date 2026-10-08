@@ -4,6 +4,10 @@
 #include <glib-object.h>
 #include <pango/pangocairo.h>
 
+static String get_entry_display(struct state_entry *entry) {
+  return entry->name.len > 0 ? entry->name : state_entry_join_argv(entry, " ");
+}
+
 int draw_ctx_init(struct draw_ctx *dc) {
   *dc = (struct draw_ctx){.measured_gen = UINT64_MAX};
   dc->font = pango_font_description_from_string("Sans Bold 28");
@@ -22,7 +26,7 @@ static void measure(const struct state *v, struct draw_ctx *dc,
   int max_w = 0, line_h = 0;
   for (size_t i = 0; i < n; i++) {
     int lw, lh;
-    String s = state_entry_join_argv(&v->entries[i], " ");
+    String s = get_entry_display(&v->entries[i]);
     pango_layout_set_text(layout, s.data, -1);
     string_deinit(&s);
     pango_layout_get_pixel_size(layout, &lw, &lh);
@@ -87,7 +91,7 @@ void draw(const struct state *v, struct draw_ctx *dc, cairo_t *cr, int w,
       cairo_set_source_rgb(cr, 0.1, 0.1, 0.1); // normal text
     }
 
-    String s = state_entry_join_argv(&v->entries[i], " ");
+    String s = get_entry_display(&v->entries[i]);
     pango_layout_set_text(layout, s.data, -1);
     string_deinit(&s);
     cairo_move_to(cr, tx, ry + row_pad);
