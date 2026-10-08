@@ -14,9 +14,13 @@
 
 #include "log.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
-#include "xdg-output-unstable-v1-client-protocol.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+
+/* Surface height as a fraction of the output's logical height, and width as a
+ * fraction of that height (< 1 keeps the surface taller than it is wide). */
+#define SURFACE_HEIGHT_FRACTION 0.6
+#define SURFACE_ASPECT 0.6
 
 static void wm_base_ping(void* data, struct xdg_wm_base* wm, uint32_t serial) {
   (void)data;
@@ -26,13 +30,6 @@ static void wm_base_ping(void* data, struct xdg_wm_base* wm, uint32_t serial) {
 static const struct xdg_wm_base_listener wm_base_listener = {
     .ping = wm_base_ping,
 };
-
-static const struct zxdg_output_v1_listener xdg_output_listener = {
-    .logical_position = (void*)0,
-    .name = (void*)0,
-    .logical_size = (void*)0,
-    .description = (void*)0,
-    .done = (void*)0};
 
 /* ---- xdg activation token listeners ---- */
 
@@ -85,12 +82,26 @@ static void layer_surface_configure(void* data,
                                     uint32_t h) {
   struct wayl* wayl = data;
 
+  if (!wayl->sized) {
+    /* Anchored to all edges, so w x h is the output's logical size. Shrink to
+     * a fraction of it; with no anchors the compositor centers us. Commit
+     * without a buffer and wait for the configure that carries our size. */
+    if (w > 0 && h > 0) {
+      wayl->height = (int32_t)(h * SURFACE_HEIGHT_FRACTION);
+      wayl->width = MIN((int32_t)(wayl->height * SURFACE_ASPECT), (int32_t)w);
+    }
+    wayl->sized = true;
+    zwlr_layer_surface_v1_set_anchor(surface, 0);
+    zwlr_layer_surface_v1_set_size(surface, wayl->width, wayl->height);
+    zwlr_layer_surface_v1_ack_configure(surface, serial);
+    wl_surface_commit(wayl->surface);
+    return;
+  }
+
   if (w > 0 && h > 0) {
     wayl->height = h;
     wayl->width = w;
   }
-  zwlr_layer_surface_v1_set_size(wayl->layer_surface, wayl->width,
-                                 wayl->height);
   zwlr_layer_surface_v1_ack_configure(surface, serial);
   wayl->listener->configure(wayl->data, wayl->width, wayl->height);
 }
@@ -302,6 +313,7 @@ static void keyboard_handle_enter(void* data,
   (void)surface;
   (void)keys;
 }
+
 static void keyboard_handle_leave(void* data,
                                   struct wl_keyboard* wl_keyboard,
                                   uint32_t serial,
@@ -427,18 +439,26 @@ static void registry_global(void* data,
   struct wayl* w = data;
   if (strcmp(iface, wl_compositor_interface.name) == 0) {
     w->compositor = wl_registry_bind(reg, name, &wl_compositor_interface, 4);
-  } else if (strcmp(iface, wl_shm_interface.name) == 0) {
+  }
+
+  else if (strcmp(iface, wl_shm_interface.name) == 0) {
     w->shm = wl_registry_bind(reg, name, &wl_shm_interface, 1);
-  } else if (strcmp(iface, xdg_wm_base_interface.name) == 0) {
+  }
+
+  else if (strcmp(iface, xdg_wm_base_interface.name) == 0) {
     w->wm_base = wl_registry_bind(reg, name, &xdg_wm_base_interface, 1);
     xdg_wm_base_add_listener(w->wm_base, &wm_base_listener, w);
-  } else if (strcmp(iface, wl_seat_interface.name) == 0) {
+  }
+
+  else if (strcmp(iface, wl_seat_interface.name) == 0) {
     seat_destroy(&w->seat);
     w->seat.wl_seat =
         wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 5));
     w->seat.wl_name = name;
     wl_seat_add_listener(w->seat.wl_seat, &seat_listener, &w->seat);
-  } else if (strcmp(iface, xdg_activation_v1_interface.name) == 0) {
+  }
+
+  else if (strcmp(iface, xdg_activation_v1_interface.name) == 0) {
     w->xdg_activation_v1 =
         wl_registry_bind(reg, name, &xdg_activation_v1_interface, 1);
     wl_proxy_set_queue((struct wl_proxy*)w->xdg_activation_v1,
@@ -458,6 +478,7 @@ static void registry_global_remove(void* data,
   (void)reg;
   (void)name;
 }
+
 static const struct wl_registry_listener registry_listener = {
     .global = registry_global,
     .global_remove = registry_global_remove,
@@ -572,6 +593,15 @@ int wayl_init(struct wayl* w,
 
   zwlr_layer_surface_v1_add_listener(w->layer_surface, &layer_surface_listener,
                                      w);
+  /* Fill the output (ignoring panels) so the first configure reports its
+   * logical size; layer_surface_configure then shrinks and centers us. */
+  zwlr_layer_surface_v1_set_anchor(w->layer_surface,
+                                   ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+                                       ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+                                       ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+                                       ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+  zwlr_layer_surface_v1_set_size(w->layer_surface, 0, 0);
+  zwlr_layer_surface_v1_set_exclusive_zone(w->layer_surface, -1);
   wl_surface_commit(w->surface); /* empty commit -> triggers first configure */
 
   int fd = wl_display_get_fd(w->display);

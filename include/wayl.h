@@ -12,7 +12,6 @@
 #include <xkbcommon/xkbcommon.h>
 
 struct xdg_activation_v1;
-struct zxdg_output_manager_v1;
 
 struct wayl;
 
@@ -66,12 +65,15 @@ struct wayl {
   struct xkb_context* xkb_ctx;
   struct wl_event_queue* xdg_activation_v1_queue;
   struct xdg_activation_v1* xdg_activation_v1;
-  struct zxdg_output_manager_v1* output_manager;
   struct seat seat;
   struct fdm* fdm;
-  int display_fd;  // -1 until registered with fdm
+  int32_t display_fd;  // -1 until registered with fdm
 
-  int width, height;  // last configured logical size
+  int32_t width, height;  // last configured logical size
+
+  /* false until the first configure (full output, all edges anchored) has
+   * been answered with our centered size. */
+  bool sized;
 
   /* true between a successful wl_display_prepare_read() and its matching
    * wl_display_read_events() / wl_display_cancel_read(). */
