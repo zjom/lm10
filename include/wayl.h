@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <wayland-client.h>
+#include <wlr-layer-shell-unstable-v1-client-protocol.h>
 #include <xkbcommon/xkbcommon.h>
 
 struct xdg_activation_v1;
@@ -59,8 +60,8 @@ struct wayl {
   struct wl_shm *shm;
   struct xdg_wm_base *wm_base;
   struct wl_surface *surface;
-  struct xdg_surface *xdg_surface;
-  struct xdg_toplevel *toplevel;
+  struct zwlr_layer_shell_v1 *layer_shell;
+  struct zwlr_layer_surface_v1 *layer_surface;
   struct xkb_context *xkb_ctx;
   struct wl_event_queue *xdg_activation_v1_queue;
   struct xdg_activation_v1 *xdg_activation_v1;

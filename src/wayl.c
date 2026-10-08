@@ -1,5 +1,6 @@
 #include "wayl.h"
 #include "log.h"
+#include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
 #include <xdg-activation-v1-client-protocol.h>
 #include <xdg-shell-client-protocol.h>
@@ -16,45 +17,16 @@
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-/* ---- xdg-shell listeners ---- */
-
 static void wm_base_ping(void *data, struct xdg_wm_base *wm, uint32_t serial) {
   (void)data;
   xdg_wm_base_pong(wm, serial);
 }
+
 static const struct xdg_wm_base_listener wm_base_listener = {
     .ping = wm_base_ping,
 };
 
-static void xdg_surface_configure(void *data, struct xdg_surface *xs,
-                                  uint32_t serial) {
-  struct wayl *w = data;
-  xdg_surface_ack_configure(xs, serial);
-  w->listener->configure(w->data, w->width, w->height);
-}
-static const struct xdg_surface_listener xdg_surface_listener = {
-    .configure = xdg_surface_configure,
-};
-
-static void toplevel_configure(void *data, struct xdg_toplevel *tl, int32_t w,
-                               int32_t h, struct wl_array *states) {
-  (void)tl;
-  (void)states;
-  struct wayl *wl = data;
-  if (w > 0 && h > 0) {
-    wl->width = w;
-    wl->height = h;
-  } /* 0 = our choice */
-}
-static void toplevel_close(void *data, struct xdg_toplevel *tl) {
-  (void)tl;
-  struct wayl *w = data;
-  w->listener->close(w->data);
-}
-static const struct xdg_toplevel_listener toplevel_listener = {
-    .configure = toplevel_configure,
-    .close = toplevel_close,
-};
+/* ---- xdg activation token listeners ---- */
 
 static void token_done(void *data, struct xdg_activation_token_v1 *token,
                        const char *name) {
@@ -62,8 +34,66 @@ static void token_done(void *data, struct xdg_activation_token_v1 *token,
   char **xdg_activation_token = data;
   *xdg_activation_token = strdup(name);
 }
+
 static const struct xdg_activation_token_v1_listener token_listener = {
     .done = token_done};
+
+void get_xdg_activation_token(struct seat *seat, const char *app_id,
+                              char **xdg_activation_token) {
+  struct wayl *wayl = seat->wayl;
+  if (wayl->xdg_activation_v1 == NULL) {
+    LOG_WARN("no xdg_activation_v1 manager");
+    return;
+  }
+  struct xdg_activation_token_v1 *token =
+      xdg_activation_v1_get_activation_token(wayl->xdg_activation_v1);
+
+  xdg_activation_token_v1_set_serial(token, seat->kbd.serial, seat->wl_seat);
+  xdg_activation_token_v1_set_surface(token, wayl->surface);
+
+  if (app_id != NULL)
+    xdg_activation_token_v1_set_app_id(token, app_id);
+
+  xdg_activation_token_v1_add_listener(token, &token_listener,
+                                       xdg_activation_token);
+  xdg_activation_token_v1_commit(token);
+
+  if (wl_display_roundtrip_queue(wayl->display,
+                                 wayl->xdg_activation_v1_queue) == -1) {
+    LOG_WARN("failed to get xdg activation token");
+  }
+
+  xdg_activation_token_v1_destroy(token);
+}
+
+/* ---- layer surface listeners ---- */
+
+static void layer_surface_configure(void *data,
+                                    struct zwlr_layer_surface_v1 *surface,
+                                    uint32_t serial, uint32_t w, uint32_t h) {
+  struct wayl *wayl = data;
+
+  if (w > 0 && h > 0) {
+    wayl->height = h;
+    wayl->width = w;
+  }
+  zwlr_layer_surface_v1_set_size(wayl->layer_surface, wayl->width,
+                                 wayl->height);
+  zwlr_layer_surface_v1_ack_configure(surface, serial);
+  wayl->listener->configure(wayl->data, wayl->width, wayl->height);
+}
+
+static void layer_surface_closed(void *data,
+                                 struct zwlr_layer_surface_v1 *surface) {
+  struct wayl *wayl = data;
+  (void)surface;
+  wayl->listener->close(wayl->data);
+}
+
+static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
+    .configure = layer_surface_configure,
+    .closed = layer_surface_closed,
+};
 
 /* ---- keyboard ---- */
 
@@ -382,7 +412,13 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
     wl_proxy_set_queue((struct wl_proxy *)w->xdg_activation_v1,
                        w->xdg_activation_v1_queue);
   }
+
+  else if (strcmp(iface, zwlr_layer_shell_v1_interface.name) == 0) {
+    w->layer_shell = wl_registry_bind(reg, name, &zwlr_layer_shell_v1_interface,
+                                      MIN(version, 1));
+  }
 }
+
 static void registry_global_remove(void *data, struct wl_registry *reg,
                                    uint32_t name) {
   (void)data;
@@ -418,11 +454,10 @@ static int32_t handle_display_events(struct fdm *fdm, void *data) {
   if (!w->read_prepared)
     return 0; /* not a reader right now; main loop will prepare again */
 
-  w->read_prepared = false; /* consumed by read_events below */
+  w->read_prepared = false; /* consumed by wayl_finish */
   if (wl_display_read_events(w->display) == -1)
     return report_display_error(w->display);
 
-  /* read_events only queues events; they still need dispatching. */
   if (wl_display_dispatch_pending(w->display) == -1)
     return report_display_error(w->display);
 
@@ -466,23 +501,48 @@ int wayl_init(struct wayl *w, struct fdm *fdm,
   wl_registry_add_listener(w->registry, &registry_listener, w);
   wl_display_roundtrip(w->display); /* receive the globals */
 
-  if (!w->compositor || !w->shm || !w->wm_base) {
-    LOG_FATAL("Compositor lacks wl_compositor, wl_shm or xdg_wm_base");
+  if (!w->compositor) {
+    LOG_FATAL("Compositor lacks wl_compositor");
+    return -1;
+  }
+
+  if (!w->shm) {
+    LOG_FATAL("Compositor lacks wl_shm");
+    return -1;
+  }
+
+  if (!w->wm_base) {
+    LOG_FATAL("Compositor lacks xdg_wm_base");
+    return -1;
+  }
+
+  if (!w->layer_shell) {
+    LOG_FATAL("Compositor zwlr_layer_shell");
     return -1;
   }
 
   w->surface = wl_compositor_create_surface(w->compositor);
-  w->xdg_surface = xdg_wm_base_get_xdg_surface(w->wm_base, w->surface);
-  xdg_surface_add_listener(w->xdg_surface, &xdg_surface_listener, w);
-  w->toplevel = xdg_surface_get_toplevel(w->xdg_surface);
-  xdg_toplevel_add_listener(w->toplevel, &toplevel_listener, w);
-  xdg_toplevel_set_title(w->toplevel, title);
+  if (!w->surface) {
+    LOG_FATAL("failed to create surface");
+    return -1;
+  }
+
+  w->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
+      w->layer_shell, w->surface, NULL, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+      title);
+  if (!w->layer_surface) {
+    LOG_FATAL("failed to create layer surface");
+    return -1;
+  }
+
+  zwlr_layer_surface_v1_add_listener(w->layer_surface, &layer_surface_listener,
+                                     w);
   wl_surface_commit(w->surface); /* empty commit -> triggers first configure */
 
   int fd = wl_display_get_fd(w->display);
   if (fdm_add(fdm, fd, EPOLLIN | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP, w,
               handle_display_events, 0) != 0) {
-    LOG_ERROR("failed to add display fd to fdm: %s",
+    LOG_FATAL("failed to add display fd to fdm: %s",
               errno ? strerror(errno) : "");
     return -1;
   }
@@ -506,10 +566,10 @@ void wayl_destroy(struct wayl *w) {
     xdg_activation_v1_destroy(w->xdg_activation_v1);
   if (w->xdg_activation_v1_queue)
     wl_event_queue_destroy(w->xdg_activation_v1_queue);
-  if (w->toplevel)
-    xdg_toplevel_destroy(w->toplevel);
-  if (w->xdg_surface)
-    xdg_surface_destroy(w->xdg_surface);
+  if (w->layer_surface)
+    zwlr_layer_surface_v1_destroy(w->layer_surface);
+  if (w->layer_shell)
+    zwlr_layer_shell_v1_destroy(w->layer_shell);
   if (w->surface)
     wl_surface_destroy(w->surface);
   if (w->wm_base)
@@ -549,32 +609,4 @@ void wayl_finish(struct wayl *w) {
     wl_display_cancel_read(w->display);
     w->read_prepared = false;
   }
-}
-
-void get_xdg_activation_token(struct seat *seat, const char *app_id,
-                              char **xdg_activation_token) {
-  struct wayl *wayl = seat->wayl;
-  if (wayl->xdg_activation_v1 == NULL) {
-    LOG_WARN("no xdg_activation_v1 manager");
-    return;
-  }
-  struct xdg_activation_token_v1 *token =
-      xdg_activation_v1_get_activation_token(wayl->xdg_activation_v1);
-
-  xdg_activation_token_v1_set_serial(token, seat->kbd.serial, seat->wl_seat);
-  xdg_activation_token_v1_set_surface(token, wayl->surface);
-
-  if (app_id != NULL)
-    xdg_activation_token_v1_set_app_id(token, app_id);
-
-  xdg_activation_token_v1_add_listener(token, &token_listener,
-                                       xdg_activation_token);
-  xdg_activation_token_v1_commit(token);
-
-  if (wl_display_roundtrip_queue(wayl->display,
-                                 wayl->xdg_activation_v1_queue) == -1) {
-    LOG_WARN("failed to get xdg activation token");
-  }
-
-  xdg_activation_token_v1_destroy(token);
 }
