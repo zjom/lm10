@@ -199,7 +199,7 @@ int main(int argc, char *argv[]) {
     struct state_entry entry = {0};
 
     DList l;
-    dlist_init(&l, argc * sizeof(String), lm__string_dlist_dtor_fn);
+    dlist_init(&l, sizeof(String), lm__string_dlist_dtor_fn);
 
     struct str str = str_of_cstring(argv[i]);
     str_trim(&str, isspace);
@@ -209,8 +209,15 @@ int main(int argc, char *argv[]) {
       str_trim(&cut, isspace);
       if (cut.len > 0) {
         String cutted = str_to_owned(&cut);
+        if (cutted.len == 0) {
+          LOG_WARN("cutted allocation failed");
+          string_deinit(&cutted);
+          continue;
+        }
         if (dlist_push_back(&l, &cutted) == NULL) {
           LOG_WARN("dlist push back null");
+          string_deinit(&cutted);
+          continue;
         }
       }
     }
