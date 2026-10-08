@@ -602,6 +602,8 @@ int wayl_init(struct wayl* w,
                                        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
   zwlr_layer_surface_v1_set_size(w->layer_surface, 0, 0);
   zwlr_layer_surface_v1_set_exclusive_zone(w->layer_surface, -1);
+  zwlr_layer_surface_v1_set_keyboard_interactivity(
+      w->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
   wl_surface_commit(w->surface); /* empty commit -> triggers first configure */
 
   int fd = wl_display_get_fd(w->display);
