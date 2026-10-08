@@ -13,7 +13,6 @@ project(
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
 fs = import('fs')
 
-# --- Dependencies -------------------------------------------------------------
 # include_type: 'system' turns -I into -isystem, so warnings from
 # glib/pango/wayland headers don't leak into your build output.
 
@@ -27,8 +26,6 @@ wayland_scanner = find_program(
   wayland_scanner_dep.get_variable('wayland_scanner'),
   native: true,
 )
-
-# --- Wayland protocol code generation -----------------------------------------
 
 wl_protocol_dir = wayland_protocols.get_variable('pkgdatadir')
 
@@ -55,8 +52,6 @@ foreach xml : protocols
   )
 endforeach
 
-# --- Third-party / generated code: warnings off -------------------------------
-
 third_party_inc = include_directories('third-party', is_system: true)
 
 third_party_lib = static_library(
@@ -68,8 +63,6 @@ third_party_lib = static_library(
   dependencies: [wayland_client],
   override_options: ['warning_level=0'],
 )
-
-# --- Executable: your code, warning_level=everything ---------------------------
 
 srcs = files(
   'src/dlist.c',
@@ -85,7 +78,7 @@ srcs = files(
 executable(
   'lm10',
   srcs,
-  protocol_headers,   # ensures headers are generated before compiling
+  protocol_headers,
   include_directories: [include_directories('include'), third_party_inc],
   link_with: third_party_lib,
   dependencies: [
