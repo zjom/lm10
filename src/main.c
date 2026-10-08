@@ -52,8 +52,7 @@ static bool exec_selection(void *data) {
   size_t i = 0;
   DLIST_FOREACH(&entry->argv, n) {
     argv[i] = DLIST_AT(n, String)->data;
-    if (argv[i] == NULL)
-      goto out_free_argv;
+    assert(argv[i] != NULL);
     i++;
   }
 
@@ -78,16 +77,14 @@ static bool exec_selection(void *data) {
   if (pid == 0) {
     /* Intermediate child */
     close(pipe_fds[0]);
+    if (setsid() == -1)
+      goto child_err;
 
     pid_t gpid = fork();
     if (gpid == -1)
       goto child_err;
     if (gpid > 0)
       _exit(0); /* Grandchild gets reparented to init */
-
-    /* Grandchild: not a process group leader, so setsid() succeeds */
-    if (setsid() == -1)
-      goto child_err;
 
     int devnull_r = open("/dev/null", O_RDONLY | O_CLOEXEC);
     if (devnull_r == -1)
@@ -137,8 +134,6 @@ static bool exec_selection(void *data) {
   }
 
 out_free_argv:
-  for (size_t j = 0; j < argc; j++)
-    free(argv[j]);
   free(argv);
   return ok;
 }
@@ -162,7 +157,7 @@ static void on_key(void *data, xkb_keysym_t sym, uint32_t mods) {
   if (!(mods & WAYL_MOD_CTRL)) {
     if (sym == XKB_KEY_Return) {
       if (!exec_selection(app)) {
-        LOG_ERROR("exec failed");
+        // TODO: handle exec failure
       }
       return;
     }
