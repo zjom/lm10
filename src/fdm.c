@@ -1,12 +1,14 @@
 #include "fdm.h"
-#include "stb_ds.h"
+
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/epoll.h>
 #include <unistd.h>
 
-int fdm_init(struct fdm *fdm) {
+#include "stb_ds.h"
+
+int fdm_init(struct fdm* fdm) {
   int epfd = epoll_create1(EPOLL_CLOEXEC);
   if (epfd == -1) {
     return -1;
@@ -16,7 +18,7 @@ int fdm_init(struct fdm *fdm) {
   return 0;
 }
 
-void fdm_destroy(struct fdm *fdm) {
+void fdm_destroy(struct fdm* fdm) {
   close(fdm->epfd);
   for (int i = 0; i < hmlen(fdm->hm); ++i) {
     epoll_ctl(fdm->epfd, EPOLL_CTL_DEL, fdm->hm[i].key, NULL);
@@ -27,8 +29,12 @@ void fdm_destroy(struct fdm *fdm) {
   hmfree(fdm->hm);
 }
 
-int fdm_add(struct fdm *fdm, uint32_t fd, uint32_t events, void *data,
-            int32_t (*cb)(struct fdm *, void *), uint32_t flags) {
+int fdm_add(struct fdm* fdm,
+            uint32_t fd,
+            uint32_t events,
+            void* data,
+            int32_t (*cb)(struct fdm*, void*),
+            uint32_t flags) {
   struct fdmdata fdmdata = {.key = fd,
                             .value = {.data = data,
                                       .cb = cb,
@@ -48,8 +54,8 @@ int fdm_add(struct fdm *fdm, uint32_t fd, uint32_t events, void *data,
   return 0;
 }
 
-void fdm_remove(struct fdm *fdm, uint32_t fd) {
-  struct fdmdata *item = hmgetp_null(fdm->hm, fd);
+void fdm_remove(struct fdm* fdm, uint32_t fd) {
+  struct fdmdata* item = hmgetp_null(fdm->hm, fd);
   if (item == NULL) {
     return;
   }
@@ -62,7 +68,7 @@ void fdm_remove(struct fdm *fdm, uint32_t fd) {
   hmdel(fdm->hm, fd);
 }
 
-int fdm_wait(struct fdm *fdm) {
+int fdm_wait(struct fdm* fdm) {
   uint32_t MAX_EVENTS = 1024;
   struct epoll_event epoll_events[MAX_EVENTS];
   int32_t event_count;
@@ -74,7 +80,7 @@ int fdm_wait(struct fdm *fdm) {
   }
 
   for (int i = 0; i < event_count; ++i) {
-    struct fdmdata *item = hmgetp_null(fdm->hm, epoll_events[i].data.fd);
+    struct fdmdata* item = hmgetp_null(fdm->hm, epoll_events[i].data.fd);
     if (item == NULL) {
       fprintf(stderr, "warning: unknown fd received from epoll\n");
       continue;

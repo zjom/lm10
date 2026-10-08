@@ -1,13 +1,14 @@
 #include "render.h"
-#include "log.h"
 
 #include <stdint.h>
 
-static int try_present(struct render *r);
+#include "log.h"
 
-static void frame_done(void *data, struct wl_callback *cb, uint32_t time) {
+static int try_present(struct render* r);
+
+static void frame_done(void* data, struct wl_callback* cb, uint32_t time) {
   (void)time;
-  struct render *r = data;
+  struct render* r = data;
   wl_callback_destroy(cb);
   r->frame_cb = NULL;
   try_present(r);
@@ -16,14 +17,14 @@ static const struct wl_callback_listener frame_listener = {
     .done = frame_done,
 };
 
-static void on_frame_release(void *data, struct frame *f) {
+static void on_frame_release(void* data, struct frame* f) {
   (void)f;
   try_present(data); /* covers the case where every buffer was busy */
 }
 
-static struct frame *acquire_frame(struct render *r) {
+static struct frame* acquire_frame(struct render* r) {
   for (size_t i = 0; i < sizeof r->frames / sizeof r->frames[0]; i++) {
-    struct frame *f = &r->frames[i];
+    struct frame* f = &r->frames[i];
     if (f->busy)
       continue;
     if (f->buffer && f->width == r->width && f->height == r->height)
@@ -43,17 +44,17 @@ static struct frame *acquire_frame(struct render *r) {
   return NULL; /* all busy; a release will retry */
 }
 
-static int try_present(struct render *r) {
+static int try_present(struct render* r) {
   if (r->err != LM_OK)
     return -1;
   if (!r->dirty || r->frame_cb != NULL || r->width <= 0 || r->height <= 0)
     return 0;
 
-  struct frame *f = acquire_frame(r);
+  struct frame* f = acquire_frame(r);
   if (f == NULL)
     return r->err != LM_OK ? -1 : 0;
 
-  cairo_t *cr = cairo_create(f->cs);
+  cairo_t* cr = cairo_create(f->cs);
   draw(r->state, &r->dctx, cr, f->width, f->height);
   cairo_destroy(cr);
   cairo_surface_flush(f->cs);
@@ -69,8 +70,10 @@ static int try_present(struct render *r) {
   return 0;
 }
 
-int render_init(struct render *r, struct wl_shm *shm,
-                struct wl_surface *surface, const struct state *state) {
+int render_init(struct render* r,
+                struct wl_shm* shm,
+                struct wl_surface* surface,
+                const struct state* state) {
   *r = (struct render){.surface = surface, .shm = shm, .state = state};
   if (draw_ctx_init(&r->dctx) != 0) {
     LOG_ERROR("failed to create font description");
@@ -79,7 +82,7 @@ int render_init(struct render *r, struct wl_shm *shm,
   return 0;
 }
 
-void render_destroy(struct render *r) {
+void render_destroy(struct render* r) {
   if (r->frame_cb)
     wl_callback_destroy(r->frame_cb);
   for (size_t i = 0; i < sizeof r->frames / sizeof r->frames[0]; i++)
@@ -88,7 +91,7 @@ void render_destroy(struct render *r) {
   *r = (struct render){0};
 }
 
-void render_resize(struct render *r, int w, int h) {
+void render_resize(struct render* r, int w, int h) {
   if (w == r->width && h == r->height)
     return;
   r->width = w;
@@ -96,7 +99,7 @@ void render_resize(struct render *r, int w, int h) {
   r->dirty = true;
 }
 
-int render_request(struct render *r) {
+int render_request(struct render* r) {
   r->dirty = true;
   return try_present(r);
 }

@@ -6,15 +6,6 @@
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/debug/lm10 a b c
  */
-#include "common.h"
-#include "dlist.h"
-#include "ds.h"
-#include "fdm.h"
-#include "log.h"
-#include "render.h"
-#include "state.h"
-#include "wayl.h"
-
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -26,20 +17,29 @@
 #include <unistd.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
+#include "common.h"
+#include "dlist.h"
+#include "ds.h"
+#include "fdm.h"
+#include "log.h"
+#include "render.h"
+#include "state.h"
+#include "wayl.h"
+
 struct app {
   struct fdm fdm;
   struct wayl wayl;
-  struct state state;   // the state
-  struct render render; // presents the state
+  struct state state;    // the state
+  struct render render;  // presents the state
   bool running;
 };
 
-static bool exec_entry(const struct state_entry *entry,
-                       const char *xdg_activation_token) {
+static bool exec_entry(const struct state_entry* entry,
+                       const char* xdg_activation_token) {
   bool ok = false;
   size_t argc = dlist_size(&entry->argv);
   /* +1 for the NULL terminator execvp requires */
-  char **argv = calloc(argc + 1, sizeof(*argv));
+  char** argv = calloc(argc + 1, sizeof(*argv));
   if (argv == NULL) {
     return false;
   }
@@ -138,8 +138,8 @@ out_free_argv:
   return ok;
 }
 
-static bool exec_selection(struct app *app, const struct state_entry *entry) {
-  char *xdg_activation_token = NULL;
+static bool exec_selection(struct app* app, const struct state_entry* entry) {
+  char* xdg_activation_token = NULL;
   get_xdg_activation_token(&app->wayl.seat, NULL, &xdg_activation_token);
   bool ok = exec_entry(entry, xdg_activation_token);
   if (!ok) {
@@ -153,23 +153,23 @@ static bool exec_selection(struct app *app, const struct state_entry *entry) {
 
 /* ---- wayl callbacks ---- */
 
-static void on_configure(void *data, int w, int h) {
-  struct app *app = data;
+static void on_configure(void* data, int w, int h) {
+  struct app* app = data;
   render_resize(&app->render, w, h);
   /* configure must be answered with a commit, even if nothing changed */
   render_request(&app->render);
 }
 
-static void on_close(void *data) {
-  struct app *app = data;
+static void on_close(void* data) {
+  struct app* app = data;
   app->running = false;
 }
 
-static void on_key(void *data, xkb_keysym_t sym, uint32_t mods) {
-  struct app *app = data;
+static void on_key(void* data, xkb_keysym_t sym, uint32_t mods) {
+  struct app* app = data;
   if (!(mods & WAYL_MOD_CTRL)) {
     if (sym == XKB_KEY_Return) {
-      const struct state_entry *entry = state_get_selection(&app->state);
+      const struct state_entry* entry = state_get_selection(&app->state);
       if (entry == NULL) {
         return;
       }
@@ -179,14 +179,14 @@ static void on_key(void *data, xkb_keysym_t sym, uint32_t mods) {
   }
 
   switch (sym) {
-  case XKB_KEY_n:
-    state_select_next(&app->state);
-    break;
-  case XKB_KEY_p:
-    state_select_prev(&app->state);
-    break;
-  default:
-    return;
+    case XKB_KEY_n:
+      state_select_next(&app->state);
+      break;
+    case XKB_KEY_p:
+      state_select_prev(&app->state);
+      break;
+    default:
+      return;
   }
   render_request(&app->render);
 }
@@ -198,12 +198,12 @@ static const struct wayl_listener wayl_listener = {
 };
 
 /* ---- main ---- */
-static void lm__string_dlist_dtor_fn(void *data) {
-  String *s = data;
+static void lm__string_dlist_dtor_fn(void* data) {
+  String* s = data;
   string_deinit(s);
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   int err = 0;
   bool fdm_ok = false, wayl_ok = false, render_ok = false;
 

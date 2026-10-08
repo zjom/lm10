@@ -1,14 +1,14 @@
 #ifndef INCLUDE_LM_DS_H
 #define INCLUDE_LM_DS_H
 
-#include "dlist.h"
-#include "stb_ds.h"
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "dlist.h"
+#include "stb_ds.h"
 
 // -- heap allocated String
 // Invariant: cap counts bytes allocated *including* the NUL terminator,
@@ -19,12 +19,12 @@
 typedef struct {
   size_t len;
   size_t cap;
-  char *data;
+  char* data;
 } String;
 
 // ensures at least `need` bytes are allocated (need includes the NUL)
 // returns 0 on allocation failure, s is left unchanged
-static inline int string_reserve(String *s, size_t need) {
+static inline int string_reserve(String* s, size_t need) {
   if (need <= s->cap) {
     return 1;
   }
@@ -38,23 +38,23 @@ static inline int string_reserve(String *s, size_t need) {
     want *= 2;
   }
 
-  char *data = realloc(s->data, want);
+  char* data = realloc(s->data, want);
   if (data == NULL) {
     return 0;
   }
   if (s->data == NULL) {
-    data[0] = '\0'; // fresh buffer from a {0} String: establish invariant
+    data[0] = '\0';  // fresh buffer from a {0} String: establish invariant
   }
   s->data = data;
   s->cap = want;
   return 1;
 }
 
-static inline char *string_init_n(String *s, size_t n) {
+static inline char* string_init_n(String* s, size_t n) {
   if (n == 0) {
-    n = 1; // always room for the NUL
+    n = 1;  // always room for the NUL
   }
-  char *data = calloc(n, sizeof(*s->data));
+  char* data = calloc(n, sizeof(*s->data));
   if (data == NULL) {
     return NULL;
   }
@@ -67,19 +67,19 @@ static inline char *string_init_n(String *s, size_t n) {
 // s->data is zeroed
 // returns pointer to first character of string
 // returns NULL if allocation errored
-static inline char *string_init(String *s) {
+static inline char* string_init(String* s) {
   return string_init_n(s, STRING_INIT_N);
 }
 
-static inline void string_deinit(String *s) {
+static inline void string_deinit(String* s) {
   free(s->data);
-  *s = (String){0}; // data = NULL, so a second deinit is harmless
+  *s = (String){0};  // data = NULL, so a second deinit is harmless
 }
 
 // returns pointer to first character of string
 // returns NULL if allocation errored
-static inline char *string_append_c(String *s, char c) {
-  if (s->len > SIZE_MAX - 2 || !string_reserve(s, s->len + 2)) { // char + NUL
+static inline char* string_append_c(String* s, char c) {
+  if (s->len > SIZE_MAX - 2 || !string_reserve(s, s->len + 2)) {  // char + NUL
     return NULL;
   }
 
@@ -90,7 +90,7 @@ static inline char *string_append_c(String *s, char c) {
 
 // builds a String from a sized, not necessarily NUL-terminated buffer
 // on failure (or src == NULL) *dst is set to {0} and NULL is returned
-static inline char *string_from_n(String *dst, const char *src, size_t len) {
+static inline char* string_from_n(String* dst, const char* src, size_t len) {
   *dst = (String){0};
   if (src == NULL || len == SIZE_MAX) {
     return NULL;
@@ -108,12 +108,12 @@ static inline char *string_from_n(String *dst, const char *src, size_t len) {
 }
 
 // returns NULL if allocation errored or src == NULL; *dst is then {0}
-static inline char *string_from(String *dst, const char *src) {
+static inline char* string_from(String* dst, const char* src) {
   return string_from_n(dst, src, src ? strlen(src) : 0);
 }
 
 // returns {0} if allocation errored or src == NULL
-static inline String string_of(const char *src) {
+static inline String string_of(const char* src) {
   String dst;
   string_from(&dst, src);
   return dst;
@@ -121,14 +121,14 @@ static inline String string_of(const char *src) {
 
 // src must not point into dst->data (realloc may move it)
 // returns NULL if allocation errored
-static inline char *string_append(String *dst, const char *src) {
+static inline char* string_append(String* dst, const char* src) {
   size_t src_len = strlen(src);
   if (src_len > SIZE_MAX - 1 - dst->len ||
       !string_reserve(dst, dst->len + src_len + 1)) {
     return NULL;
   }
 
-  memcpy(dst->data + dst->len, src, src_len + 1); // copies the NUL too
+  memcpy(dst->data + dst->len, src, src_len + 1);  // copies the NUL too
   dst->len += src_len;
   return dst->data;
 }
@@ -136,23 +136,23 @@ static inline char *string_append(String *dst, const char *src) {
 // -- str: a non-owning view of `len` bytes. NOT NUL-terminated in general.
 
 struct str {
-  const char *data;
+  const char* data;
   size_t len;
 };
 
-static inline struct str str_of_string(const String *s) {
+static inline struct str str_of_string(const String* s) {
   assert(s != NULL);
   return (struct str){.data = s->data, .len = s->len};
 }
 
-static inline struct str str_of_cstring(const char *s) {
+static inline struct str str_of_cstring(const char* s) {
   assert(s != NULL);
   return (struct str){.data = s, .len = strlen(s)};
 }
 
 // removes the first n bytes from s and returns them
 // if s is shorter than n, s is unchanged and an empty str is returned
-static struct str str_cut_left(struct str *s, size_t n) {
+static struct str str_cut_left(struct str* s, size_t n) {
   if (s->len < n) {
     return (struct str){.data = NULL, .len = 0};
   }
@@ -165,7 +165,7 @@ static struct str str_cut_left(struct str *s, size_t n) {
 
 // removes the last n bytes from s and returns them
 // if s is shorter than n, s is unchanged and an empty str is returned
-static inline struct str str_cut_right(struct str *s, size_t n) {
+static inline struct str str_cut_right(struct str* s, size_t n) {
   if (s->len < n) {
     return (struct str){.data = NULL, .len = 0};
   }
@@ -176,7 +176,7 @@ static inline struct str str_cut_right(struct str *s, size_t n) {
 }
 
 // strips leading and trailing bytes matching pred (e.g. isspace)
-static inline void str_trim(struct str *s, int (*pred)(int)) {
+static inline void str_trim(struct str* s, int (*pred)(int)) {
   // cast to unsigned char: ctype functions are UB on negative chars
   while (s->len > 0 && pred((unsigned char)s->data[0])) {
     s->data += 1;
@@ -189,24 +189,24 @@ static inline void str_trim(struct str *s, int (*pred)(int)) {
 
 // returns the part of s before the first delim and advances s past the delim
 // if delim is absent, returns all of s and leaves s empty
-static inline struct str str_split_left(struct str *s, char delim) {
-  const char *p = s->len ? memchr(s->data, delim, s->len) : NULL;
+static inline struct str str_split_left(struct str* s, char delim) {
+  const char* p = s->len ? memchr(s->data, delim, s->len) : NULL;
   if (p == NULL) {
     return str_cut_left(s, s->len);
   }
 
   struct str out = str_cut_left(s, (size_t)(p - s->data));
-  s->data += 1; // skip the delimiter
+  s->data += 1;  // skip the delimiter
   s->len -= 1;
   return out;
 }
 
 // copies the view into a new owned String
 // returns {0} on allocation failure
-static inline String str_to_owned(const struct str *s) {
+static inline String str_to_owned(const struct str* s) {
   String out;
   string_from_n(&out, s->data ? s->data : "", s->len);
   return out;
 }
 
-#endif // INCLUDE_LM_DS_H
+#endif  // INCLUDE_LM_DS_H

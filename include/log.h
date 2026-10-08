@@ -38,42 +38,53 @@
 #endif
 
 /* Strip directories from __FILE__ for shorter output */
-#define LOG_FILENAME_                                                          \
+#define LOG_FILENAME_ \
   (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 
 /* Runtime minimum level (one copy per translation unit; fine for most uses) */
 static int log_runtime_level_ = LOG_LEVEL_TRACE;
-static FILE *log_stream_ = NULL; /* NULL means stderr */
+static FILE* log_stream_ = NULL; /* NULL means stderr */
 
-static inline void log_set_level(int level) { log_runtime_level_ = level; }
-static inline void log_set_stream(FILE *fp) { log_stream_ = fp; }
+static inline void log_set_level(int level) {
+  log_runtime_level_ = level;
+}
+static inline void log_set_stream(FILE* fp) {
+  log_stream_ = fp;
+}
 
 #if defined(__GNUC__) || defined(__clang__)
-#define LOG_PRINTF_(fmt_idx, arg_idx)                                          \
+#define LOG_PRINTF_(fmt_idx, arg_idx) \
   __attribute__((format(printf, fmt_idx, arg_idx)))
 #else
 #define LOG_PRINTF_(fmt_idx, arg_idx)
 #endif
 
-static inline void log_write_(int level, const char *file, int line,
-                              const char *func, const char *fmt, ...)
-    LOG_PRINTF_(5, 6);
+static inline void log_write_(int level,
+                              const char* file,
+                              int line,
+                              const char* func,
+                              const char* fmt,
+                              ...) LOG_PRINTF_(5, 6);
 
-static inline void log_write_(int level, const char *file, int line,
-                              const char *func, const char *fmt, ...) {
-  static const char *names[] = {"TRACE", "DEBUG", "INFO ",
+static inline void log_write_(int level,
+                              const char* file,
+                              int line,
+                              const char* func,
+                              const char* fmt,
+                              ...) {
+  static const char* names[] = {"TRACE", "DEBUG", "INFO ",
                                 "WARN ", "ERROR", "FATAL"};
 #ifndef LOG_NO_COLOR
-  static const char *colors[] = {"\x1b[90m", "\x1b[36m", "\x1b[32m",
+  static const char* colors[] = {"\x1b[90m", "\x1b[36m", "\x1b[32m",
                                  "\x1b[33m", "\x1b[31m", "\x1b[35m"};
   const char *color = colors[level], *reset = "\x1b[0m";
 #else
   const char *color = "", *reset = "";
 #endif
-  FILE *out = log_stream_ ? log_stream_ : stderr;
+  FILE* out = log_stream_ ? log_stream_ : stderr;
   char ts[20], msg[1024];
   time_t now;
-  struct tm *tm;
+  struct tm* tm;
   va_list ap;
 
   if (level < log_runtime_level_)
@@ -95,17 +106,17 @@ static inline void log_write_(int level, const char *file, int line,
 }
 
 /* Format string is part of __VA_ARGS__ so zero-arg calls work in plain C99 */
-#define LOG_AT_(lvl, ...)                                                      \
-  do {                                                                         \
-    log_write_((lvl), LOG_FILENAME_, __LINE__, __func__, __VA_ARGS__);         \
+#define LOG_AT_(lvl, ...)                                              \
+  do {                                                                 \
+    log_write_((lvl), LOG_FILENAME_, __LINE__, __func__, __VA_ARGS__); \
   } while (0)
 
 /* Disabled levels: dead code, so arguments are still type-checked
  * (no unused-variable warnings) but the optimizer removes the call. */
-#define LOG_NOOP_(...)                                                         \
-  do {                                                                         \
-    if (0)                                                                     \
-      log_write_(0, "", 0, "", __VA_ARGS__);                                   \
+#define LOG_NOOP_(...)                       \
+  do {                                       \
+    if (0)                                   \
+      log_write_(0, "", 0, "", __VA_ARGS__); \
   } while (0)
 
 #if LOG_LEVEL <= LOG_LEVEL_TRACE
