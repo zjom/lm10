@@ -1,5 +1,4 @@
-/* ztd_map.h - single-header hash map: typed, insertion-ordered, open addressing
- * (C11)
+/* ztd_map.h - single-header hash map: typed, insertion-ordered (C11)
  *
  * USAGE
  *   In exactly one .c file:
@@ -17,29 +16,39 @@
  *                              bool failed; ...index fields... }
  *                 The entries live in one dense array, in insertion order
  *                 (until a removal moves the last entry into the hole), so
- *                 a map starts with the same fields as a ZTD_LIST and can
- *                 be iterated as m.ptr[0 .. m.len). A separate open-addressing
- *                 index finds them. Operations are macros taking a POINTER
- *                 to the map. Declare a type once with a typedef; two
- *                 spellings of ZTD_MAP(int, int) are distinct structs:
+ *                 a map can be iterated as m.ptr[0 .. m.len). A separate
+ *                 open-addressing index finds them. Operations are macros
+ *                 taking a POINTER to the map. Declare a type once with a
+ *                 typedef; two spellings of ZTD_MAP(int, int) are distinct
+ *                 structs:
  *                     typedef ZTD_MAP(int, float) IntFloatMap;
+ *
+ *   ZTD_MAP_OF(E) The same, with an entry type you name, so you can declare
+ *                 entry variables (ZTD_MAP_REMOVE_ENTRY) without typeof. E
+ *                 must start with a member `key` and have a member `val`;
+ *                 further members are zero-filled on insert:
+ *                     typedef struct { const char *key; int val; } Pair;
+ *                     typedef ZTD_MAP_OF(Pair) PairMap;
  *
  *   Keys          Hashed and compared by the map's hash/eq functions. The
  *                 default (ZTD_MAP_INIT) is bytewise over sizeof(K): right
  *                 for integers, pointers, enums and structs WITHOUT padding.
  *                 For anything else pass functions with ZTD_MAP_INIT_FN(h, eq):
  *                     uint64_t h(const void *key, size_t key_size);
- *                     bool    eq(const void *a, const void *b, size_t
- * key_size); ZTD_MAP_INIT_CSTR compares `const char *` keys by contents. The
- * map stores keys by value: for string keys it holds the pointer, and the
- * characters must outlive the entry.
+ *                     bool eq(const void *a, const void *b, size_t ksize);
+ *                 ZTD_MAP_INIT_CSTR compares `const char *` keys by contents.
+ *                 The map stores keys by value: for string keys it holds the
+ *                 pointer, and the characters must outlive the entry.
+ *                 Floating-point keys need custom functions too: bytewise,
+ *                 -0.0 and 0.0 are different keys.
  *
  *   ZtdArena      With ztd_arena.h (included before or after this header, in
- *                 any order) you get arena-backed maps: ZTD_MAP_INIT_ARENA(&a),
- *                 ZTD_MAP_INIT_FN_ARENA(&a, h, eq),
- * ZTD_MAP_INIT_CSTR_ARENA(&a). ZTD_MAP_FREE then leaves the memory to the
- * arena. The implementation file must include ztd_arena.h too; otherwise these
- * fail to link.
+ *                 any order) you get arena-backed maps:
+ *                 ZTD_MAP_INIT_ARENA(&a), ZTD_MAP_INIT_FN_ARENA(&a, h, eq),
+ *                 ZTD_MAP_INIT_CSTR_ARENA(&a).
+ *                 ZTD_MAP_FREE then leaves the memory to the arena. The
+ *                 implementation file must include ztd_arena.h too; otherwise
+ *                 these fail to link.
  *
  *   ZtdStr        With ztd_str.h (in any order) you get ZtdStr keys:
  *                 ZTD_MAP_INIT_STR / ZTD_MAP_INIT_STR_ARENA(&a). Keys are
@@ -51,6 +60,9 @@
  *                 comparator for K sorts entries by key; call
  *                 ZTD_MAP_REINDEX after reordering:
  *                     ARR_SORT(&m, cmp_int);  MAP_REINDEX(&m);
+ *                 Only use ZTD_ARR_* on a map, never the growing or
+ *                 removing ZTD_LIST_* operations: they don't know about the
+ *                 index or the scratch entry.
  *
  * SHORT NAMES
  *   By default the header also defines unprefixed aliases:
@@ -70,8 +82,11 @@
  *   double *p = MAP_GET(&m, 7);               // NULL if absent
  *   double  d = MAP_GET_OR(&m, 8, -1.0);      // value or default
  *   if (MAP_HAS(&m, 7)) MAP_REMOVE(&m, 7);
- *   for (size_t i = 0; i < m.len; i++) printf("%d %g\n", m.ptr[i].key,
- * m.ptr[i].val); if (m.failed) out_of_memory(); MAP_FREE(&m);
+ *   if (MAP_REMOVE_INTO(&m, 9, &d)) ...       // removed; its value is in d
+ *   for (size_t i = 0; i < m.len; i++)
+ *       printf("%d %g\n", m.ptr[i].key, m.ptr[i].val);
+ *   if (m.failed) out_of_memory();
+ *   MAP_FREE(&m);
  *
  *   typedef MAP(Str, int) WordCount;          // with ztd_str.h
  *   WordCount wc = MAP_INIT_STR;
@@ -88,7 +103,13 @@
  *     on an empty map (len == 0) do not evaluate the key at all.
  *   - The value argument may contain unparenthesised commas, as in
  *     MAP_PUT(&m, k, (Point){1, 2}); a compound-literal KEY must be wrapped
- *     in parentheses. Values may read the map but must not modify it.
+ *     in parentheses. Values may read the map (they are evaluated after the
+ *     entry exists) but must not modify it.
+ *   - Lookups share one scratch key and index per map, so a key expression
+ *     must not look up the same map, and two lookups on the same map must
+ *     not appear in one unsequenced expression: f(MAP_GET(&m, 1),
+ *     MAP_GET(&m, 2)) is undefined. Separate them with ; , && || or ?:.
+ *     For the same reason, concurrent lookups need external locking.
  *   - Lookups write the key into a scratch entry, so they need a non-const
  *     map (the observable contents do not change).
  *   - Allocation errors are sticky, as in ZTD_LIST: after a failure every
@@ -99,7 +120,8 @@
  *   - Inserting can move the entries: it invalidates pointers into the map
  *     (including those from ZTD_MAP_GET / ZTD_MAP_AT) and entry indices are
  *     stable only until the next removal.
- *   - ZTD_MAP_REMOVE moves the last entry into the hole. To remove while
+ *   - ZTD_MAP_REMOVE (and _INTO, _ENTRY) move the last entry into the hole;
+ *     ZTD_MAP_REMOVE_ORDERED keeps the order but costs O(len). To remove while
  *     iterating, iterate backwards.
  *   - Do not change a key in place; to reorder entries, rewrite them and
  *     call ZTD_MAP_REINDEX. Keys must stay unique.
@@ -156,12 +178,14 @@ typedef struct ZtdMapSlot {
 } ZtdMapSlot;
 
 /* ptr[cap] is a scratch entry (the allocation holds cap + 1 entries). */
-#define ZTD_MAP(K, V)                                                   \
+#define ZTD_MAP(K, V) \
+  ZTD_MAP_OF(struct { \
+    K key;            \
+    V val;            \
+  })
+#define ZTD_MAP_OF(E)                                                   \
   struct {                                                              \
-    struct {                                                            \
-      K key;                                                            \
-      V val;                                                            \
-    }* ptr;                                                             \
+    E* ptr;                                                             \
     size_t len;                                                         \
     size_t cap;                                                         \
     struct ZtdArena* arena;                                             \
@@ -170,7 +194,8 @@ typedef struct ZtdMapSlot {
     size_t nslots;                                                      \
     ZtdMapHashFn hash; /* NULL: bytewise */                             \
     ZtdMapEqFn eq;     /* NULL: bytewise */                             \
-    size_t tmp_;       /* scratch for the lookup macros */              \
+    size_t tmp_;       /* scratch index for the lookup macros */        \
+    size_t ins_;       /* scratch index for the inserting macros */     \
   }
 
 #define ZTD_MAP_NPOS ((size_t)-1)
@@ -180,7 +205,7 @@ typedef struct ZtdMapSlot {
   {                  \
   }
 #define ZTD_MAP_INIT_FN(h, e) \
-  {nullptr, 0, 0, nullptr, false, nullptr, 0, (h), (e), 0}
+  {nullptr, 0, 0, nullptr, false, nullptr, 0, (h), (e), 0, 0}
 #else
 #define ZTD_MAP_INIT {0}
 #define ZTD_MAP_INIT_FN(h, e) {.hash = (h), .eq = (e)}
@@ -255,6 +280,9 @@ ZTD_MAP_DEF size_t ztd_map__put(void* ptr,
                                 size_t elem_size,
                                 size_t key_size,
                                 bool only_new);
+/* Flags for ztd_map__remove. */
+#define ZTD_MAP__KEEP 1    /* copy the removed entry to the scratch entry */
+#define ZTD_MAP__ORDERED 2 /* shift later entries down instead of swapping */
 ZTD_MAP_DEF bool ztd_map__remove(void* ptr,
                                  size_t* len,
                                  size_t cap,
@@ -263,7 +291,8 @@ ZTD_MAP_DEF bool ztd_map__remove(void* ptr,
                                  ZtdMapHashFn hash,
                                  ZtdMapEqFn eq,
                                  size_t elem_size,
-                                 size_t key_size);
+                                 size_t key_size,
+                                 int flags);
 ZTD_MAP_DEF void ztd_map__reindex(void* ptr,
                                   size_t* len,
                                   size_t cap,
@@ -297,21 +326,23 @@ ZTD_MAP_DEF void ztd_map__free(void* ptr,
 #define ZTD_MAP__ROOM(m) \
   (((m)->len < (m)->cap && !(m)->failed) || ZTD_MAP_RESERVE(m, 1))
 
-/* Set k to v, inserting or overwriting. -> bool */
-#define ZTD_MAP_PUT(m, k, ...)                                                 \
-  (ZTD_MAP__ROOM(m)                                                            \
-       ? (ZTD_MAP__SCRATCH(m, k),                                              \
-          (m)->ptr[ztd_map__put(ZTD_MAP__CORE(m), false)].val = (__VA_ARGS__), \
-          true)                                                                \
-       : false)
+/* Set k to v, inserting or overwriting. -> bool
+ * The entry's index goes in ins_ (sequenced before the value is evaluated),
+ * so a value that looks up this map, clobbering the scratch key and tmp_,
+ * can't redirect the store. */
+#define ZTD_MAP_PUT(m, k, ...)                                            \
+  (ZTD_MAP__ROOM(m) ? (ZTD_MAP__SCRATCH(m, k),                            \
+                       (m)->ins_ = ztd_map__put(ZTD_MAP__CORE(m), false), \
+                       (m)->ptr[(m)->ins_].val = (__VA_ARGS__), true)     \
+                    : false)
 
-/* Insert k -> v only if k is absent. -> bool (false if present or on failure;
- * check m->failed to tell them apart) */
+/* Insert k -> v only if k is absent; v is evaluated only then. -> bool
+ * (false if present or on failure; check m->failed to tell them apart) */
 #define ZTD_MAP_PUT_NEW(m, k, ...)                                            \
   (ZTD_MAP__ROOM(m) && (ZTD_MAP__SCRATCH(m, k),                               \
-                        ((m)->tmp_ = ztd_map__put(ZTD_MAP__CORE(m), true)) != \
+                        ((m)->ins_ = ztd_map__put(ZTD_MAP__CORE(m), true)) != \
                             ZTD_MAP_NPOS)                                     \
-       ? ((m)->ptr[(m)->tmp_].val = (__VA_ARGS__), true)                      \
+       ? ((m)->ptr[(m)->ins_].val = (__VA_ARGS__), true)                      \
        : false)
 
 /* Pointer to k's value, inserting a zero-filled one if absent; NULL on
@@ -340,9 +371,26 @@ ZTD_MAP_DEF void ztd_map__free(void* ptr,
 #define ZTD_MAP_HAS(m, k) (ZTD_MAP_INDEX(m, k) != ZTD_MAP_NPOS)
 
 /* Remove k, moving the last entry into its place. -> bool (false if absent) */
-#define ZTD_MAP_REMOVE(m, k)                                              \
-  ((m)->len ? (ZTD_MAP__SCRATCH(m, k), ztd_map__remove(ZTD_MAP__CORE(m))) \
-            : false)
+#define ZTD_MAP_REMOVE(m, k) ZTD_MAP__REMOVE(m, k, 0)
+
+/* Remove k, keeping the order of the other entries; O(len). -> bool */
+#define ZTD_MAP_REMOVE_ORDERED(m, k) ZTD_MAP__REMOVE(m, k, ZTD_MAP__ORDERED)
+
+/* Remove k and store its value in *out / its whole entry in *out (e.g. to
+ * free an owned key). *out is untouched if k is absent. -> bool */
+#define ZTD_MAP_REMOVE_INTO(m, k, out)           \
+  (ZTD_MAP__REMOVE(m, k, ZTD_MAP__KEEP)          \
+       ? (*(out) = (m)->ptr[(m)->cap].val, true) \
+       : false)
+#define ZTD_MAP_REMOVE_ENTRY(m, k, out)                                       \
+  ((void)sizeof((m)->ptr == (out)), ZTD_MAP__REMOVE(m, k, ZTD_MAP__KEEP)      \
+                                        ? (*(out) = (m)->ptr[(m)->cap], true) \
+                                        : false)
+
+#define ZTD_MAP__REMOVE(m, k, flags)                                          \
+  ((m)->len                                                                   \
+       ? (ZTD_MAP__SCRATCH(m, k), ztd_map__remove(ZTD_MAP__CORE(m), (flags))) \
+       : false)
 
 /* Rebuild the index after reordering or rewriting m->ptr[0 .. len). */
 #define ZTD_MAP_REINDEX(m) ztd_map__reindex(ZTD_MAP__CORE(m))
@@ -390,7 +438,11 @@ typedef ZtdMapEqFn MapEqFn;
 #define MAP_GET(m, k) ZTD_MAP_GET(m, k)
 #define MAP_GET_OR(m, k, ...) ZTD_MAP_GET_OR(m, k, __VA_ARGS__)
 #define MAP_HAS(m, k) ZTD_MAP_HAS(m, k)
+#define MAP_OF(E) ZTD_MAP_OF(E)
 #define MAP_REMOVE(m, k) ZTD_MAP_REMOVE(m, k)
+#define MAP_REMOVE_ORDERED(m, k) ZTD_MAP_REMOVE_ORDERED(m, k)
+#define MAP_REMOVE_INTO(m, k, out) ZTD_MAP_REMOVE_INTO(m, k, out)
+#define MAP_REMOVE_ENTRY(m, k, out) ZTD_MAP_REMOVE_ENTRY(m, k, out)
 #define MAP_REINDEX(m) ZTD_MAP_REINDEX(m)
 #define MAP_CLEAR(m) ZTD_MAP_CLEAR(m)
 #define MAP_FREE(m) ZTD_MAP_FREE(m)
@@ -425,7 +477,7 @@ ZTD_MAP_DEF ZtdArena* ztd_map__arena_linked(ZtdArena* a);
 /* A map that grows inside arena *a (automatic-storage initializers). */
 #ifdef __cplusplus
 #define ZTD_MAP_INIT_FN_ARENA(a, h, e) \
-  {nullptr, 0, 0, ztd_map__arena_linked(a), false, nullptr, 0, (h), (e), 0}
+  {nullptr, 0, 0, ztd_map__arena_linked(a), false, nullptr, 0, (h), (e), 0, 0}
 #else
 #define ZTD_MAP_INIT_FN_ARENA(a, h, e) \
   {.arena = ztd_map__arena_linked(a), .hash = (h), .eq = (e)}
@@ -786,7 +838,8 @@ ZTD_MAP_DEF bool ztd_map__remove(void* ptr,
                                  ZtdMapHashFn hash,
                                  ZtdMapEqFn eq,
                                  size_t elem_size,
-                                 size_t key_size) {
+                                 size_t key_size,
+                                 int flags) {
   if (nslots == 0)
     return false;
   uint32_t h =
@@ -812,9 +865,21 @@ ZTD_MAP_DEF bool ztd_map__remove(void* ptr,
   slots[i].idx = 0;
   slots[i].hash = 0;
 
-  /* Move the last entry into the gap and repoint its slot. */
+  if (flags & ZTD_MAP__KEEP)
+    memcpy(ZTD_MAP__ENTRY(ptr, cap, elem_size),
+           ZTD_MAP__ENTRY(ptr, idx, elem_size), elem_size);
+
   size_t last = *len - 1;
-  if (idx != last) {
+  if (flags & ZTD_MAP__ORDERED) {
+    /* Close the gap and renumber the index entries that moved down. */
+    memmove(ZTD_MAP__ENTRY(ptr, idx, elem_size),
+            ZTD_MAP__ENTRY(ptr, idx + 1, elem_size), (last - idx) * elem_size);
+    for (size_t s = 0; s < nslots; s++) {
+      if (slots[s].idx > idx + 1)
+        slots[s].idx--;
+    }
+  } else if (idx != last) {
+    /* Move the last entry into the gap and repoint its slot. */
     unsigned char *dst = ZTD_MAP__ENTRY(ptr, idx, elem_size),
                   *src = ZTD_MAP__ENTRY(ptr, last, elem_size);
     memcpy(dst, src, elem_size);
