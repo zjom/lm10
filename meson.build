@@ -77,6 +77,7 @@ srcs = files(
   'src/render.c',
   'src/state.c',
   'src/wayl.c',
+  'src/kb.c',
 )
 
 executable(
