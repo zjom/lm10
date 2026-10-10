@@ -48,19 +48,19 @@ static bool load_default_ui(struct config_ui* ui) {
   ui->selection_radius = 8;
   ui->show_counter = true;
   ui->colors = (struct config_colors){
-      .background = RGBA(0x1e1e2ef2),
-      .border = RGBA(0x89b4faff),
-      .text = RGBA(0xcdd6f4ff),
-      .match = RGBA(0xf9e2afff),
-      .selection = RGBA(0x45475aff),
-      .selection_text = RGBA(0xffffffff),
-      .selection_match = RGBA(0xf9e2afff),
-      .prompt = RGBA(0x89b4faff),
-      .input = RGBA(0xcdd6f4ff),
-      .placeholder = RGBA(0x6c7086ff),
-      .cursor = RGBA(0xf5e0dcff),
-      .counter = RGBA(0x6c7086ff),
-      .separator = RGBA(0x313244ff),
+      .background = RGBA(0x141415f2),
+      .border = RGBA(0x878787ff),
+      .text = RGBA(0xcdcdcdff),
+      .match = RGBA(0xe8b589ff),
+      .selection = RGBA(0x333738ff),
+      .selection_text = RGBA(0xcdcdcdff),
+      .selection_match = RGBA(0xe8b589ff),
+      .prompt = RGBA(0x6e94b2ff),
+      .input = RGBA(0xcdcdcdff),
+      .placeholder = RGBA(0x606079ff),
+      .cursor = RGBA(0xcdcdcdff),
+      .counter = RGBA(0x606079ff),
+      .separator = RGBA(0x252530ff),
   };
   return set_str(&ui->font, STR("Sans 13")) &&
          set_str(&ui->prompt, STR("❯ ")) &&
