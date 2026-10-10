@@ -1,5 +1,5 @@
-#ifndef LM10_DRAW_H
-#define LM10_DRAW_H
+#ifndef LM_DRAW_H
+#define LM_DRAW_H
 
 #include "state.h"
 
@@ -25,4 +25,4 @@ void draw(const struct state* v,
           int w,
           int h);
 
-#endif  // !LM10_DRAW_H
+#endif  // !LM_DRAW_H
