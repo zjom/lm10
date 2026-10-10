@@ -8,6 +8,7 @@
 #include "state.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <wayland-client-protocol.h>
 
 /* Presents the state on a wl_surface: owns the buffer pool and paces redraws
@@ -17,7 +18,8 @@ struct render {
   struct wl_shm* shm;
   struct wl_callback* frame_cb;  // non-NULL means a frame callback is pending
   struct frame frames[2];
-  int width, height;  // target size in buffer pixels
+  int width, height;  // target size in surface-local (logical) pixels
+  uint32_t scale120;  // buffer pixels per logical pixel, in 120ths
   bool dirty;         // something changed since the last commit
   const struct state* state;
   struct draw_ctx dctx;
@@ -32,8 +34,13 @@ int render_init(struct render* r,
                 const struct config_ui* ui);
 void render_destroy(struct render* r);
 
-/* Sets the target size; takes effect on the next present. */
+/* Sets the target logical size; takes effect on the next present. */
 void render_resize(struct render* r, int w, int h);
+
+/* Sets the scale in 120ths (120 = 1x); takes effect on the next present.
+ * Non-integer scales need a wp_viewport on the surface whose destination
+ * tracks the logical size. */
+void render_set_scale(struct render* r, uint32_t scale120);
 
 /* Marks the state dirty and presents now if a buffer and the frame slot are
  * free; otherwise a pending frame/release callback presents later.

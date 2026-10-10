@@ -2,12 +2,14 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <fractional-scale-v1-client-protocol.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/mman.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
+#include <viewporter-client-protocol.h>
 #include <xdg-activation-v1-client-protocol.h>
 #include <xdg-shell-client-protocol.h>
 #include <xkbcommon/xkbcommon-names.h>
@@ -68,6 +70,68 @@ void get_xdg_activation_token(struct seat* seat,
   xdg_activation_token_v1_destroy(token);
 }
 
+/* ---- scale ---- */
+
+static void set_scale(struct wayl* w, uint32_t scale120) {
+  if (scale120 == 0 || scale120 == w->scale120)
+    return;
+  w->scale120 = scale120;
+  w->listener->scale(w->data, scale120);
+}
+
+static void fractional_scale_preferred(void* data,
+                                       struct wp_fractional_scale_v1* fs,
+                                       uint32_t scale) {
+  (void)fs;
+  set_scale(data, scale);
+}
+
+static const struct wp_fractional_scale_v1_listener fractional_scale_listener =
+    {
+        .preferred_scale = fractional_scale_preferred,
+};
+
+static void surface_enter(void* data,
+                          struct wl_surface* surface,
+                          struct wl_output* output) {
+  (void)data;
+  (void)surface;
+  (void)output;
+}
+
+static void surface_leave(void* data,
+                          struct wl_surface* surface,
+                          struct wl_output* output) {
+  (void)data;
+  (void)surface;
+  (void)output;
+}
+
+static void surface_preferred_buffer_scale(void* data,
+                                           struct wl_surface* surface,
+                                           int32_t factor) {
+  (void)surface;
+  struct wayl* w = data;
+  /* The fractional scale is more precise; this one is rounded up. */
+  if (w->fractional_scale == NULL && factor > 0)
+    set_scale(w, (uint32_t)factor * 120);
+}
+
+static void surface_preferred_buffer_transform(void* data,
+                                               struct wl_surface* surface,
+                                               uint32_t transform) {
+  (void)data;
+  (void)surface;
+  (void)transform;
+}
+
+static const struct wl_surface_listener surface_listener = {
+    .enter = surface_enter,
+    .leave = surface_leave,
+    .preferred_buffer_scale = surface_preferred_buffer_scale,
+    .preferred_buffer_transform = surface_preferred_buffer_transform,
+};
+
 /* ---- layer surface listeners ---- */
 
 static void layer_surface_configure(void* data,
@@ -100,6 +164,9 @@ static void layer_surface_configure(void* data,
     wayl->width = w;
   }
   zwlr_layer_surface_v1_ack_configure(surface, serial);
+  /* Double-buffered: lands with the buffer the app commits in response. */
+  if (wayl->viewport)
+    wp_viewport_set_destination(wayl->viewport, wayl->width, wayl->height);
   wayl->listener->configure(wayl->data, wayl->width, wayl->height);
 }
 
@@ -445,7 +512,9 @@ static void registry_global(void* data,
                             uint32_t version) {
   struct wayl* w = data;
   if (strcmp(iface, wl_compositor_interface.name) == 0) {
-    w->compositor = wl_registry_bind(reg, name, &wl_compositor_interface, 4);
+    /* v6 for wl_surface.preferred_buffer_scale */
+    w->compositor =
+        wl_registry_bind(reg, name, &wl_compositor_interface, MIN(version, 6));
   }
 
   else if (strcmp(iface, wl_shm_interface.name) == 0) {
@@ -470,6 +539,15 @@ static void registry_global(void* data,
         wl_registry_bind(reg, name, &xdg_activation_v1_interface, 1);
     wl_proxy_set_queue((struct wl_proxy*)w->xdg_activation_v1,
                        w->xdg_activation_v1_queue);
+  }
+
+  else if (strcmp(iface, wp_viewporter_interface.name) == 0) {
+    w->viewporter = wl_registry_bind(reg, name, &wp_viewporter_interface, 1);
+  }
+
+  else if (strcmp(iface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+    w->fractional_scale_manager = wl_registry_bind(
+        reg, name, &wp_fractional_scale_manager_v1_interface, 1);
   }
 
   else if (strcmp(iface, zwlr_layer_shell_v1_interface.name) == 0) {
@@ -539,6 +617,7 @@ int wayl_init(struct wayl* w,
       .display_fd = -1,
       .width = 640,
       .height = 480,
+      .scale120 = 120,
       .listener = listener,
       .data = data,
   };
@@ -590,6 +669,15 @@ int wayl_init(struct wayl* w,
   if (!w->surface) {
     LOG_FATAL("failed to create surface");
     return -1;
+  }
+  wl_surface_add_listener(w->surface, &surface_listener, w);
+
+  if (w->viewporter && w->fractional_scale_manager) {
+    w->viewport = wp_viewporter_get_viewport(w->viewporter, w->surface);
+    w->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
+        w->fractional_scale_manager, w->surface);
+    wp_fractional_scale_v1_add_listener(w->fractional_scale,
+                                        &fractional_scale_listener, w);
   }
 
   w->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
@@ -646,6 +734,14 @@ void wayl_destroy(struct wayl* w) {
     zwlr_layer_surface_v1_destroy(w->layer_surface);
   if (w->layer_shell)
     zwlr_layer_shell_v1_destroy(w->layer_shell);
+  if (w->fractional_scale)
+    wp_fractional_scale_v1_destroy(w->fractional_scale);
+  if (w->viewport)
+    wp_viewport_destroy(w->viewport);
+  if (w->fractional_scale_manager)
+    wp_fractional_scale_manager_v1_destroy(w->fractional_scale_manager);
+  if (w->viewporter)
+    wp_viewporter_destroy(w->viewporter);
   if (w->surface)
     wl_surface_destroy(w->surface);
   if (w->wm_base)

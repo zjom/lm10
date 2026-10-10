@@ -245,6 +245,12 @@ static void on_configure(void* data, int w, int h) {
   render_request(&app->render);
 }
 
+static void on_scale(void* data, uint32_t scale120) {
+  struct app* app = data;
+  render_set_scale(&app->render, scale120);
+  render_request(&app->render);
+}
+
 static void on_close(void* data) {
   struct app* app = data;
   app->running = false;
@@ -323,6 +329,7 @@ static const struct wayl_listener wayl_listener = {
     .size = on_size,
     .configure = on_configure,
     .close = on_close,
+    .scale = on_scale,
     .key = on_key,
 };
 

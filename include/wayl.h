@@ -13,6 +13,10 @@
 #include <xkbcommon/xkbcommon.h>
 
 struct xdg_activation_v1;
+struct wp_viewporter;
+struct wp_viewport;
+struct wp_fractional_scale_manager_v1;
+struct wp_fractional_scale_v1;
 
 struct wayl;
 
@@ -24,6 +28,9 @@ struct wayl_listener {
   /* After ack_configure; the app must commit a buffer in response. */
   void (*configure)(void* data, int w, int h);
   void (*close)(void* data);
+  /* The compositor's preferred scale for the surface changed, in 120ths
+   * (120 = 1x). Sizes passed to size/configure stay logical. */
+  void (*scale)(void* data, uint32_t scale120);
   /* Key press, and again for each repeat, already resolved by the kb
    * manager. Ignored keys are not reported. */
   void (*key)(void* data, const struct kb_result* key);
@@ -64,12 +71,19 @@ struct wayl {
   struct xkb_context* xkb_ctx;
   struct wl_event_queue* xdg_activation_v1_queue;
   struct xdg_activation_v1* xdg_activation_v1;
+  /* Optional: with both, the surface gets fractional scales; otherwise only
+   * integer ones from wl_surface.preferred_buffer_scale (wl_compositor v6). */
+  struct wp_viewporter* viewporter;
+  struct wp_fractional_scale_manager_v1* fractional_scale_manager;
+  struct wp_viewport* viewport;
+  struct wp_fractional_scale_v1* fractional_scale;
   struct seat seat;
   struct fdm* fdm;
   struct kb_manager* kb;  // not owned
   int32_t display_fd;     // -1 until registered with fdm
 
   int32_t width, height;  // last configured logical size
+  uint32_t scale120;      // preferred scale in 120ths
 
   /* false until the first configure (full output, all edges anchored) has
    * been answered with our centered size. */

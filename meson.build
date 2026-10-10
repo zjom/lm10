@@ -17,7 +17,7 @@ fs = import('fs')
 # glib/pango/wayland headers don't leak into your build output.
 
 wayland_client = dependency('wayland-client', include_type: 'system')
-wayland_protocols = dependency('wayland-protocols', version: '>=1.21')
+wayland_protocols = dependency('wayland-protocols', version: '>=1.31')
 pangocairo = dependency('pangocairo', include_type: 'system')
 xkbcommon = dependency('xkbcommon', include_type: 'system')
 m = meson.get_compiler('c').find_library('m', required: false)
@@ -33,6 +33,8 @@ wl_protocol_dir = wayland_protocols.get_variable('pkgdatadir')
 protocols = [
   'third-party/wlr-layer-shell-unstable-v1.xml',
   wl_protocol_dir / 'stable/xdg-shell/xdg-shell.xml',
+  wl_protocol_dir / 'stable/viewporter/viewporter.xml',
+  wl_protocol_dir / 'staging/fractional-scale/fractional-scale-v1.xml',
   wl_protocol_dir / 'staging/xdg-activation/xdg-activation-v1.xml',
 ]
 

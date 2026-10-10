@@ -22,19 +22,25 @@ static void on_frame_release(void* data, struct frame* f) {
   try_present(data); /* covers the case where every buffer was busy */
 }
 
+/* round(logical * scale), as the fractional-scale protocol prescribes. */
+static int to_buffer(int v, uint32_t scale120) {
+  return (int)(((int64_t)v * scale120 + 60) / 120);
+}
+
 static struct frame* acquire_frame(struct render* r) {
+  int bw = to_buffer(r->width, r->scale120);
+  int bh = to_buffer(r->height, r->scale120);
   for (size_t i = 0; i < sizeof r->frames / sizeof r->frames[0]; i++) {
     struct frame* f = &r->frames[i];
     if (f->busy)
       continue;
-    if (f->buffer && f->width == r->width && f->height == r->height)
+    if (f->buffer && f->width == bw && f->height == bh)
       return f;
 
     /* Free but missing or the wrong size: safe to replace, since the
      * compositor doesn't hold it. */
     frame_destroy(f);
-    enum lm_err e =
-        frame_init(f, r->shm, r->width, r->height, on_frame_release, r);
+    enum lm_err e = frame_init(f, r->shm, bw, bh, on_frame_release, r);
     if (e != LM_OK) {
       r->err = e;
       return NULL;
@@ -54,11 +60,18 @@ static int try_present(struct render* r) {
   if (f == NULL)
     return r->err != LM_OK ? -1 : 0;
 
+  /* Draw in logical units; cairo and pango render at buffer resolution. */
   cairo_t* cr = cairo_create(f->cs);
-  draw(r->state, &r->dctx, cr, f->width, f->height);
+  cairo_scale(cr, r->scale120 / 120.0, r->scale120 / 120.0);
+  draw(r->state, &r->dctx, cr, r->width, r->height);
   cairo_destroy(cr);
   cairo_surface_flush(f->cs);
 
+  /* Integer scales go through buffer_scale. Fractional ones rely on the
+   * viewport destination, so the buffer is taken at 1:1 in buffer pixels. */
+  int32_t buffer_scale =
+      r->scale120 % 120 == 0 ? (int32_t)r->scale120 / 120 : 1;
+  wl_surface_set_buffer_scale(r->surface, buffer_scale);
   wl_surface_attach(r->surface, f->buffer, 0, 0);
   wl_surface_damage_buffer(r->surface, 0, 0, INT32_MAX, INT32_MAX);
   r->frame_cb = wl_surface_frame(r->surface);
@@ -75,7 +88,8 @@ int render_init(struct render* r,
                 struct wl_surface* surface,
                 const struct state* state,
                 const struct config_ui* ui) {
-  *r = (struct render){.surface = surface, .shm = shm, .state = state};
+  *r = (struct render){
+      .surface = surface, .shm = shm, .state = state, .scale120 = 120};
   if (draw_ctx_init(&r->dctx, ui) != 0) {
     LOG_ERROR("failed to create font description");
     return -1;
@@ -97,6 +111,13 @@ void render_resize(struct render* r, int w, int h) {
     return;
   r->width = w;
   r->height = h;
+  r->dirty = true;
+}
+
+void render_set_scale(struct render* r, uint32_t scale120) {
+  if (scale120 == 0 || scale120 == r->scale120)
+    return;
+  r->scale120 = scale120;
   r->dirty = true;
 }
 
