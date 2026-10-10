@@ -13,9 +13,9 @@ struct config_bind {
 
 typedef LIST(struct config_bind) ConfigBindList;
 
-
 struct config {
-  ConfigBindList binds;  // Binds are applied in order, so a later bind for the same key overrides an earlier one.
+  ConfigBindList binds;  // Binds are applied in order, so a later bind for the
+                         // same key overrides an earlier one.
 };
 
 void config_init(struct config* cfg);

@@ -64,7 +64,7 @@ struct wayl {
   struct seat seat;
   struct fdm* fdm;
   struct kb_manager* kb;  // not owned
-  int32_t display_fd;  // -1 until registered with fdm
+  int32_t display_fd;     // -1 until registered with fdm
 
   int32_t width, height;  // last configured logical size
 
