@@ -18,6 +18,7 @@
 #include <unistd.h>
 
 #include "common.h"
+#include "config.h"
 #include "fdm.h"
 #include "kb.h"
 #include "log.h"
@@ -27,6 +28,7 @@
 
 struct app {
   struct fdm fdm;
+  struct config config;
   struct kb_manager* kb;
   struct wayl wayl;
   struct state state;    // the state
@@ -151,6 +153,14 @@ static bool exec_selection(struct app* app, const struct state_entry* entry) {
   return ok;
 }
 
+static bool load_binds(struct kb_manager* kb, const struct config* cfg) {
+  ARR_FOREACH(const struct config_bind, b, &cfg->binds) {
+    if (!kb_load_bind(kb, b->key, b->action))
+      return false;
+  }
+  return true;
+}
+
 /* ---- wayl callbacks ---- */
 
 static void on_configure(void* data, int w, int h) {
@@ -246,6 +256,7 @@ int main(int argc, char* argv[]) {
   bool fdm_ok = false, wayl_ok = false, render_ok = false;
 
   struct app app = {.running = true};
+  config_init(&app.config);
   state_init(&app.state);
 
   for (int i = 1; i < argc; i++) {
@@ -276,8 +287,14 @@ int main(int argc, char* argv[]) {
   }
   fdm_ok = true;
 
+  if (!config_load_defaults(&app.config)) {
+    LOG_FATAL("failed to load config");
+    err = 1;
+    goto cleanup;
+  }
+
   app.kb = kb_manager_new();
-  if (app.kb == NULL || !kb_load_defaults(app.kb)) {
+  if (app.kb == NULL || !load_binds(app.kb, &app.config)) {
     LOG_FATAL("failed to set up keybindings");
     err = 1;
     goto cleanup;
@@ -339,5 +356,6 @@ cleanup:
   if (fdm_ok)
     fdm_destroy(&app.fdm);
   state_destroy(&app.state);
+  config_destroy(&app.config);
   return err == 0 ? 0 : 1;
 }

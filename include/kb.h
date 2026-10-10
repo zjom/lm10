@@ -56,7 +56,6 @@ bool kb_load_bind(struct kb_manager* mgr,
                   struct kb_keypress lhs,
                   enum kb_action rhs);
 void kb_unload_bind(struct kb_manager* mgr, struct kb_keypress lhs);
-bool kb_load_defaults(struct kb_manager* mgr);
 
 /* Either a bound action, or (action == KB_ACTION_NONE) text to insert; both
  * empty means the key is ignored. utf8 is NUL-terminated. */
