@@ -15,6 +15,7 @@
  *
  *   -n/--name NAME   display name; defaults to the command line
  *   -i/--icon ICON   display icon
+ *   -D/--detached    run in a new session, detached from the terminal
  *
  * Long options also accept --opt=VALUE, and "--" ends the options. Malformed
  * lines are skipped with a warning. */

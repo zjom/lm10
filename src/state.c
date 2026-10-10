@@ -51,10 +51,15 @@ static bool refilter(struct state* state) {
   return true;
 }
 
-bool state_push(struct state* state, Str name, const StrList* argv, Str icon) {
+bool state_push(struct state* state,
+                Str name,
+                const StrList* argv,
+                Str icon,
+                bool detached) {
   struct state_entry e = {
       .argv = LIST_INIT_ARENA(&state->arena),
       .icon = str_arena_dup(&state->arena, icon),
+      .detached = detached,
   };
   if (e.icon.ptr == NULL || !LIST_RESERVE(&e.argv, argv->len)) {
     return false;

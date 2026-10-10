@@ -1,13 +1,13 @@
 /*
  * lm10: a Wayland picker. Lists entries read from stdin, one per line as
- * `[-n NAME] [-i ICON] COMMAND [ARG...]`; typing filters them, C-n / C-p move
- * the selection, Return runs it.
+ * `[-n NAME] [-i ICON] [-D] COMMAND [ARG...]`; typing filters them, C-n / C-p
+ * move the selection, Return runs it.
  *
  * Build:
  * meson setup bld/debug && ninja -C bld/debug
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...):
- *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' foot |
+ *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-D foot' |
  * ./bld/debug/lm10
  */
 #include <assert.h>
@@ -39,16 +39,19 @@ struct app {
   struct state state;    // the state
   struct render render;  // presents the state
   bool running;
+  /* A non-detached entry to exec in place of lm10 once it has shut down,
+   * with the activation token to hand it. */
+  const struct state_entry* exec_pending;
+  char* exec_token;
 };
 
-static bool exec_entry(const struct state_entry* entry,
-                       const char* xdg_activation_token) {
-  bool ok = false;
-  size_t argc = entry->argv.len;
+/* A NULL-terminated argv pointing into entry, or NULL on allocation failure.
+ * Free with free(). */
+static char** entry_argv(const struct state_entry* entry) {
   /* +1 for the NULL terminator execvp requires */
-  char** argv = calloc(argc + 1, sizeof(*argv));
+  char** argv = calloc(entry->argv.len + 1, sizeof(*argv));
   if (argv == NULL) {
-    return false;
+    return NULL;
   }
 
   size_t i = 0;
@@ -61,6 +64,52 @@ static bool exec_entry(const struct state_entry* entry,
   LOG_DEBUG("argv:");
   for (size_t j = 0; argv[j] != NULL; j++)
     LOG_DEBUG("  %zu: \"%s\"", j, argv[j]);
+  return argv;
+}
+
+static void set_activation_env(const char* xdg_activation_token) {
+  if (xdg_activation_token != NULL) {
+    /* Prepare client for xdg activation startup */
+    setenv("XDG_ACTIVATION_TOKEN", xdg_activation_token, 1);
+    /* And X11 startup notifications */
+    setenv("DESKTOP_STARTUP_ID", xdg_activation_token, 1);
+  }
+}
+
+/* Replaces lm10 with the entry's command, so it keeps lm10's terminal,
+ * session and stdout/stderr. Only returns on failure. */
+static void exec_inplace(const struct state_entry* entry,
+                         const char* xdg_activation_token) {
+  char** argv = entry_argv(entry);
+  if (argv == NULL) {
+    LOG_ERROR("argv allocation failed");
+    return;
+  }
+  set_activation_env(xdg_activation_token);
+
+  /* stdin carried the entry list; give the command the terminal instead */
+  if (!isatty(STDIN_FILENO)) {
+    int fd = open("/dev/tty", O_RDWR | O_CLOEXEC);
+    if (fd == -1)
+      fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    if (fd != -1) {
+      dup2(fd, STDIN_FILENO);
+      close(fd);
+    }
+  }
+
+  execvp(argv[0], argv);
+  LOG_ERROR("failed to execute: %s", strerror(errno));
+  free(argv);
+}
+
+static bool exec_entry(const struct state_entry* entry,
+                       const char* xdg_activation_token) {
+  bool ok = false;
+  char** argv = entry_argv(entry);
+  if (argv == NULL) {
+    return false;
+  }
 
   int pipe_fds[2];
   if (pipe2(pipe_fds, O_CLOEXEC) == -1) {
@@ -82,12 +131,7 @@ static bool exec_entry(const struct state_entry* entry,
     if (setsid() == -1)
       goto child_err;
 
-    if (xdg_activation_token != NULL) {
-      /* Prepare client for xdg activation startup */
-      setenv("XDG_ACTIVATION_TOKEN", xdg_activation_token, 1);
-      /* And X11 startup notifications */
-      setenv("DESKTOP_STARTUP_ID", xdg_activation_token, 1);
-    }
+    set_activation_env(xdg_activation_token);
 
     pid_t gpid = fork();
     if (gpid == -1)
@@ -148,12 +192,20 @@ out_free_argv:
 static bool exec_selection(struct app* app, const struct state_entry* entry) {
   char* xdg_activation_token = NULL;
   get_xdg_activation_token(&app->wayl.seat, NULL, &xdg_activation_token);
+  app->running = false;
+
+  if (!entry->detached) {
+    /* main execs it after tearing everything else down */
+    app->exec_pending = entry;
+    app->exec_token = xdg_activation_token;
+    return true;
+  }
+
   bool ok = exec_entry(entry, xdg_activation_token);
   if (!ok) {
     app->wayl.err = LM_ERR_EXEC;
   }
   free(xdg_activation_token);
-  app->running = false;
 
   return ok;
 }
@@ -354,6 +406,11 @@ cleanup:
   kb_manager_destroy(app.kb); /* after wayl: it looks keys up in it */
   if (fdm_ok)
     fdm_destroy(&app.fdm);
+  if (err == 0 && app.exec_pending != NULL) {
+    exec_inplace(app.exec_pending, app.exec_token); /* entry is in state */
+    err = 1;
+  }
+  free(app.exec_token);
   state_destroy(&app.state);
   config_destroy(&app.config);
   return err == 0 ? 0 : 1;

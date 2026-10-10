@@ -67,7 +67,7 @@ static bool parse_line(struct input* in, char* line, size_t len) {
   char* p = line;
   char* end = line + len;
   Str name = {0}, icon = {0};
-  bool err = false;
+  bool detached = false, err = false;
   Str word;
 
   LIST_CLEAR(&in->words);
@@ -87,6 +87,11 @@ static bool parse_line(struct input* in, char* line, size_t len) {
       break;
     }
 
+    if (str_eq(word, STR("-D")) || str_eq(word, STR("--detached"))) {
+      detached = true;
+      continue;
+    }
+
     Str* dst;
     Str val;
     bool has_val = false;
@@ -98,7 +103,10 @@ static bool parse_line(struct input* in, char* line, size_t len) {
       }
     }
 
-    if (str_eq(word, STR("-n")) || str_eq(word, STR("--name"))) {
+    if (str_eq(word, STR("--detached"))) {
+      LOG_WARN("stdin: option \"--detached\" takes no value, skipping line");
+      return false;
+    } else if (str_eq(word, STR("-n")) || str_eq(word, STR("--name"))) {
       dst = &name;
     } else if (str_eq(word, STR("-i")) || str_eq(word, STR("--icon"))) {
       dst = &icon;
@@ -135,7 +143,7 @@ static bool parse_line(struct input* in, char* line, size_t len) {
     return false;
   }
 
-  if (!state_push(in->state, name, &in->words, icon))
+  if (!state_push(in->state, name, &in->words, icon, detached))
     goto oom;
   return true;
 
