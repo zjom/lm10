@@ -51,27 +51,40 @@ static bool refilter(struct state* state) {
   return true;
 }
 
-bool state_push(struct state* state, const char* name, StrList argv) {
-  Str s;
-  if (name != NULL) {
-    s = str_arena_dup(&state->arena, str_from_cstr(name));
-  } else {
-    StrBuf b = STRBUF_INIT_ARENA(&state->arena);
-    if (!strlist_join(&b, &argv, STR(" ")) || !sb_reserve(&b, 0)) {
+bool state_push(struct state* state, Str name, const StrList* argv, Str icon) {
+  struct state_entry e = {
+      .argv = LIST_INIT_ARENA(&state->arena),
+      .icon = str_arena_dup(&state->arena, icon),
+  };
+  if (e.icon.ptr == NULL || !LIST_RESERVE(&e.argv, argv->len)) {
+    return false;
+  }
+  ARR_FOREACH(const Str, w, argv) {
+    Str owned = str_arena_dup(&state->arena, *w);
+    if (owned.ptr == NULL || !LIST_PUSH(&e.argv, owned)) {
       return false;
     }
-    s = sb_str(&b);
   }
-  if (s.ptr == NULL) {
+
+  if (name.len != 0) {
+    e.name = str_arena_dup(&state->arena, name);
+  } else {
+    StrBuf b = STRBUF_INIT_ARENA(&state->arena);
+    if (!strlist_join(&b, &e.argv, STR(" ")) || !sb_reserve(&b, 0)) {
+      return false;
+    }
+    e.name = sb_str(&b);
+  }
+  if (e.name.ptr == NULL) {
     return false;
   }
 
-  if (!LIST_PUSH(&state->entries, (struct state_entry){.name = s, .argv = argv})) {
+  if (!LIST_PUSH(&state->entries, e)) {
     return false;
   }
   state->gen++;
 
-  if (contains_nocase(s, sb_str(&state->query)) &&
+  if (contains_nocase(e.name, sb_str(&state->query)) &&
       !LIST_PUSH(&state->matches, state->entries.len - 1)) {
     return false;
   }

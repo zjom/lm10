@@ -12,6 +12,7 @@
 struct state_entry {
   Str name;      // NUL-terminated, lives in the state arena
   StrList argv;  // each Str NUL-terminated, lives in the state arena
+  Str icon;      // NUL-terminated, lives in the state arena; empty if unset
 };
 
 typedef LIST(struct state_entry) StateEntryList;
@@ -32,9 +33,10 @@ struct state {
 void state_init(struct state* state);
 void state_destroy(struct state* state);
 
-/* argv must live in state->arena. If name is NULL, the argv joined with
- * spaces is used. Returns false on allocation failure. */
-bool state_push(struct state* state, const char* name, StrList argv);
+/* Copies name, argv and icon into state->arena. argv must be non-empty. If
+ * name is empty, argv joined with spaces is used. Returns false on allocation
+ * failure. */
+bool state_push(struct state* state, Str name, const StrList* argv, Str icon);
 
 /* Cursor targets. Words are runs of non-space characters. */
 enum state_motion {

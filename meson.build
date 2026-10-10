@@ -72,6 +72,7 @@ third_party_lib = static_library(
 srcs = files(
   'src/draw.c',
   'src/fdm.c',
+  'src/input.c',
   'src/frame.c',
   'src/main.c',
   'src/render.c',

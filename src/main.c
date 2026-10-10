@@ -1,11 +1,14 @@
 /*
- * lm10: a Wayland picker. Lists its arguments; typing filters them, C-n / C-p
- * move the selection, Return runs it.
+ * lm10: a Wayland picker. Lists entries read from stdin, one per line as
+ * `[-n NAME] [-i ICON] COMMAND [ARG...]`; typing filters them, C-n / C-p move
+ * the selection, Return runs it.
  *
  * Build:
  * meson setup bld/debug && ninja -C bld/debug
  *
- * Run inside a Wayland session (GNOME, KDE, Sway, ...): ./bld/debug/lm10 a b c
+ * Run inside a Wayland session (GNOME, KDE, Sway, ...):
+ *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' foot |
+ * ./bld/debug/lm10
  */
 #include <assert.h>
 #include <errno.h>
@@ -20,6 +23,7 @@
 #include "common.h"
 #include "config.h"
 #include "fdm.h"
+#include "input.h"
 #include "kb.h"
 #include "log.h"
 #include "render.h"
@@ -30,6 +34,7 @@ struct app {
   struct fdm fdm;
   struct config config;
   struct kb_manager* kb;
+  struct input input;  // feeds entries from stdin into the state
   struct wayl wayl;
   struct state state;    // the state
   struct render render;  // presents the state
@@ -161,6 +166,11 @@ static bool load_binds(struct kb_manager* kb, const struct config* cfg) {
   return true;
 }
 
+static void on_entries(void* data) {
+  struct app* app = data;
+  render_request(&app->render);
+}
+
 /* ---- wayl callbacks ---- */
 
 static void on_configure(void* data, int w, int h) {
@@ -251,34 +261,13 @@ static const struct wayl_listener wayl_listener = {
 };
 
 /* ---- main ---- */
-int main(int argc, char* argv[]) {
+int main(void) {
   int err = 0;
-  bool fdm_ok = false, wayl_ok = false, render_ok = false;
+  bool fdm_ok = false, wayl_ok = false, render_ok = false, input_ok = false;
 
   struct app app = {.running = true};
   config_init(&app.config);
   state_init(&app.state);
-
-  for (int i = 1; i < argc; i++) {
-    StrList args = LIST_INIT_ARENA(&app.state.arena);
-
-    StrSplit it = str_split(str_trim(str_from_cstr(argv[i])), STR(" "));
-    Str tok;
-    while (str_split_next(&it, &tok)) {
-      tok = str_trim(tok);
-      if (tok.len == 0) {
-        continue;  // runs of spaces yield empty fields
-      }
-      Str owned = str_arena_dup(&app.state.arena, tok);  // NUL-terminated
-      if (owned.ptr == NULL || !LIST_PUSH(&args, owned)) {
-        LOG_WARN("argument allocation failed");
-      }
-    }
-
-    if (args.len && !state_push(&app.state, NULL, args)) {
-      LOG_WARN("entry allocation failed");
-    }
-  }
 
   if (fdm_init(&app.fdm) != 0) {
     LOG_FATAL("failed to init fdm");
@@ -314,6 +303,14 @@ int main(int argc, char* argv[]) {
   }
   render_ok = true;
 
+  /* after render: new entries request a redraw */
+  if (input_init(&app.input, &app.fdm, STDIN_FILENO, &app.state, on_entries,
+                 &app) != 0) {
+    err = 1;
+    goto cleanup;
+  }
+  input_ok = true;
+
   // we may have inherited XDG_ACTIVATION_TOKEN
   // from launching parent process.
   unsetenv("XDG_ACTIVATION_TOKEN");
@@ -348,6 +345,8 @@ int main(int argc, char* argv[]) {
   }
 
 cleanup:
+  if (input_ok)
+    input_destroy(&app.input);
   if (render_ok)
     render_destroy(&app.render); /* before wayl: uses its surface and shm */
   if (wayl_ok)
