@@ -121,20 +121,30 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 /* ---- keyboard ---- */
 
 static void seat_emit_key(struct seat* seat, xkb_keycode_t keycode) {
+  static const struct {
+    const char* name;
+    uint32_t mod;
+  } mod_names[] = {
+      {XKB_MOD_NAME_CTRL, KB_MOD_CTRL},
+      {XKB_MOD_NAME_SHIFT, KB_MOD_SHIFT},
+      {XKB_MOD_NAME_ALT, KB_MOD_ALT},
+      {XKB_MOD_NAME_LOGO, KB_MOD_SUPER},
+  };
+
   struct xkb_state* st = seat->kbd.xkb_state;
   uint32_t mods = 0;
-  if (xkb_state_mod_name_is_active(st, XKB_MOD_NAME_CTRL,
-                                   XKB_STATE_MODS_EFFECTIVE) > 0)
-    mods |= WAYL_MOD_CTRL;
-  if (xkb_state_mod_name_is_active(st, XKB_MOD_NAME_SHIFT,
-                                   XKB_STATE_MODS_EFFECTIVE) > 0)
-    mods |= WAYL_MOD_SHIFT;
-  if (xkb_state_mod_name_is_active(st, XKB_MOD_NAME_ALT,
-                                   XKB_STATE_MODS_EFFECTIVE) > 0)
-    mods |= WAYL_MOD_ALT;
+  for (size_t i = 0; i < sizeof mod_names / sizeof mod_names[0]; i++) {
+    if (xkb_state_mod_name_is_active(st, mod_names[i].name,
+                                     XKB_STATE_MODS_EFFECTIVE) > 0)
+      mods |= mod_names[i].mod;
+  }
 
   struct wayl* w = seat->wayl;
-  w->listener->key(w->data, xkb_state_key_get_one_sym(st, keycode), mods);
+  struct kb_result r =
+      kb_get_action(w->kb, mods, xkb_state_key_get_one_sym(st, keycode));
+  if (r.action == KB_ACTION_NONE && r.utf8[0] == '\0')
+    return;
+  w->listener->key(w->data, &r);
 }
 
 static struct timespec ns_to_timespec(int64_t ns) {
@@ -522,11 +532,13 @@ static int32_t handle_display_events(struct fdm* fdm, void* data) {
 
 int wayl_init(struct wayl* w,
               struct fdm* fdm,
+              struct kb_manager* kb,
               const struct wayl_listener* listener,
               void* data,
               const char* title) {
   *w = (struct wayl){
       .fdm = fdm,
+      .kb = kb,
       .display_fd = -1,
       .width = 640,
       .height = 480,

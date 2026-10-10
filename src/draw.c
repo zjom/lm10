@@ -30,6 +30,10 @@ static void measure(const struct state* v,
     if (lh > line_h)
       line_h = lh;
   }
+  if (line_h == 0) { /* no entries: still need a row height for the query */
+    pango_layout_set_text(layout, "> ", -1);
+    pango_layout_get_pixel_size(layout, NULL, &line_h);
+  }
   dc->max_w = max_w;
   dc->line_h = line_h;
   dc->measured_gen = v->gen;
@@ -65,10 +69,19 @@ void draw(const struct state* v,
 
   const double pad_x = 16, pad_y = 8;  // panel padding
   const double row_pad = 6;            // vertical padding inside each row
-  size_t n = v->entries.len;
+  size_t n = v->matches.len;
+
+  /* Query row: prompt + query text, then a bar for the cursor. */
+  StrBuf line = STRBUF_INIT;
+  sb_append(&line, STR("> "));
+  sb_append(&line, sb_str(&v->query));
+  int qw, qh;
+  pango_layout_set_text(layout, sb_cstr(&line), -1);
+  pango_layout_get_pixel_size(layout, &qw, &qh);
+  sb_free(&line);
 
   double row_h = dc->line_h + 2 * row_pad;
-  double tw = dc->max_w, th = row_h * n;
+  double tw = dc->max_w > qw ? dc->max_w : qw, th = row_h * (n + 1);
   double tx = (w - tw) / 2.0, ty = (h - th) / 2.0;
 
   /* Panel background */
@@ -76,9 +89,18 @@ void draw(const struct state* v,
   cairo_rectangle(cr, tx - pad_x, ty - pad_y, tw + 2 * pad_x, th + 2 * pad_y);
   cairo_fill(cr);
 
+  cairo_set_source_rgb(cr, 0.15, 0.15, 0.15);  // query bg
+  cairo_rectangle(cr, tx - pad_x, ty, tw + 2 * pad_x, row_h);
+  cairo_fill(cr);
+  cairo_set_source_rgb(cr, 1, 1, 1);
+  cairo_move_to(cr, tx, ty + row_pad);
+  pango_cairo_show_layout(cr, layout);
+  cairo_rectangle(cr, tx + qw + 2, ty + row_pad, 2, qh);  // cursor
+  cairo_fill(cr);
+
   /* Rows */
   for (size_t i = 0; i < n; i++) {
-    double ry = ty + i * row_h;
+    double ry = ty + (i + 1) * row_h;
 
     if (i == v->selected) {
       cairo_set_source_rgb(cr, 0.20, 0.45, 0.90);  // highlight bg
@@ -89,8 +111,8 @@ void draw(const struct state* v,
       cairo_set_source_rgb(cr, 0.1, 0.1, 0.1);  // normal text
     }
 
-    pango_layout_set_text(layout, v->entries.ptr[i].name.ptr,
-                          (int)v->entries.ptr[i].name.len);
+    const struct state_entry* e = state_match(v, i);
+    pango_layout_set_text(layout, e->name.ptr, (int)e->name.len);
     cairo_move_to(cr, tx, ry + row_pad);
     pango_cairo_show_layout(cr, layout);
   }

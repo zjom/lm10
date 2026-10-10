@@ -1,5 +1,6 @@
 /*
- * lm10: a Wayland picker. Lists its arguments; C-n / C-p move the selection.
+ * lm10: a Wayland picker. Lists its arguments; typing filters them, C-n / C-p
+ * move the selection, Return runs it.
  *
  * Build:
  * meson setup bld/debug && ninja -C bld/debug
@@ -15,10 +16,10 @@
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <xkbcommon/xkbcommon-keysyms.h>
 
 #include "common.h"
 #include "fdm.h"
+#include "kb.h"
 #include "log.h"
 #include "render.h"
 #include "state.h"
@@ -26,6 +27,7 @@
 
 struct app {
   struct fdm fdm;
+  struct kb_manager* kb;
   struct wayl wayl;
   struct state state;    // the state
   struct render render;  // presents the state
@@ -163,32 +165,42 @@ static void on_close(void* data) {
   app->running = false;
 }
 
-static void on_key(void* data, xkb_keysym_t sym, uint32_t mods) {
+static void on_key(void* data, const struct kb_result* key) {
   struct app* app = data;
-  if (!(mods & WAYL_MOD_CTRL)) {
-    if (sym == XKB_KEY_Return) {
-      const struct state_entry* entry = state_get_selection(&app->state);
-      if (entry == NULL) {
-        return;
-      }
-      exec_selection(app, entry);
-      return;
-    }
-  }
+  struct state* st = &app->state;
+  bool ok = true;
 
-  switch (sym) {
-    case XKB_KEY_Escape:
+  switch (key->action) {
+    case KB_ACTION_NONE:
+      ok = state_query_append(st, str_from_cstr(key->utf8));
+      break;
+    case KB_ACTION_CANCEL:
       app->running = false;
       return;
-    case XKB_KEY_n:
-      state_select_next(&app->state);
+    case KB_ACTION_DELETE_PREV:
+      ok = state_query_delete_prev(st);
       break;
-    case XKB_KEY_p:
-      state_select_prev(&app->state);
+    case KB_ACTION_DELETE_PREV_WORD:
+      ok = state_query_delete_prev_word(st);
       break;
-    default:
+    case KB_ACTION_DELETE_LINE:
+      ok = state_query_clear(st);
+      break;
+    case KB_ACTION_MATCH_EXEC: {
+      const struct state_entry* entry = state_get_selection(st);
+      if (entry != NULL)
+        exec_selection(app, entry);
       return;
+    }
+    case KB_ACTION_MATCH_NEXT:
+      state_select_next(st);
+      break;
+    case KB_ACTION_MATCH_PREV:
+      state_select_prev(st);
+      break;
   }
+  if (!ok)
+    LOG_WARN("query allocation failed");
   render_request(&app->render);
 }
 
@@ -234,8 +246,16 @@ int main(int argc, char* argv[]) {
   }
   fdm_ok = true;
 
+  app.kb = kb_manager_new();
+  if (app.kb == NULL || !kb_load_defaults(app.kb)) {
+    LOG_FATAL("failed to set up keybindings");
+    err = 1;
+    goto cleanup;
+  }
+
   wayl_ok = true; /* wayl_destroy handles a partial init */
-  if (wayl_init(&app.wayl, &app.fdm, &wayl_listener, &app, "lm10") != 0) {
+  if (wayl_init(&app.wayl, &app.fdm, app.kb, &wayl_listener, &app, "lm10") !=
+      0) {
     err = 1;
     goto cleanup;
   }
@@ -285,6 +305,7 @@ cleanup:
     render_destroy(&app.render); /* before wayl: uses its surface and shm */
   if (wayl_ok)
     wayl_destroy(&app.wayl);
+  kb_manager_destroy(app.kb); /* after wayl: it looks keys up in it */
   if (fdm_ok)
     fdm_destroy(&app.fdm);
   state_destroy(&app.state);

@@ -3,6 +3,7 @@
 
 #include "common.h"
 #include "fdm.h"
+#include "kb.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,19 +16,14 @@ struct xdg_activation_v1;
 
 struct wayl;
 
-enum wayl_mod {
-  WAYL_MOD_CTRL = 1 << 0,
-  WAYL_MOD_SHIFT = 1 << 1,
-  WAYL_MOD_ALT = 1 << 2,
-};
-
 /* How wayl talks to the app. All callbacks run from inside event dispatch. */
 struct wayl_listener {
   /* After ack_configure; the app must commit a buffer in response. */
   void (*configure)(void* data, int w, int h);
   void (*close)(void* data);
-  /* Key press, and again for each repeat. mods is a mask of wayl_mod. */
-  void (*key)(void* data, xkb_keysym_t sym, uint32_t mods);
+  /* Key press, and again for each repeat, already resolved by the kb
+   * manager. Ignored keys are not reported. */
+  void (*key)(void* data, const struct kb_result* key);
 };
 
 struct repeat {
@@ -67,6 +63,7 @@ struct wayl {
   struct xdg_activation_v1* xdg_activation_v1;
   struct seat seat;
   struct fdm* fdm;
+  struct kb_manager* kb;  // not owned
   int32_t display_fd;  // -1 until registered with fdm
 
   int32_t width, height;  // last configured logical size
@@ -89,6 +86,7 @@ struct wayl {
  * with fdm. On failure, returns -1; call wayl_destroy either way. */
 int wayl_init(struct wayl* w,
               struct fdm* fdm,
+              struct kb_manager* kb,
               const struct wayl_listener* listener,
               void* data,
               const char* title);
