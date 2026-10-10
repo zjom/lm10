@@ -1,11 +1,13 @@
 #include "state.h"
 
 #include <ctype.h>
+#include <string.h>
 
 void state_init(struct state* state) {
   state->arena = (Arena)ARENA_INIT;
   state->entries = (StateEntryList)LIST_INIT_ARENA(&state->arena);
   state->query = (StrBuf)STRBUF_INIT;
+  state->cursor = 0;
   state->matches = (IndexList)LIST_INIT;
   state->selected = 0;
   state->gen = 0;
@@ -15,6 +17,7 @@ void state_destroy(struct state* state) {
   arena_free(&state->arena);
   sb_free(&state->query);
   LIST_FREE(&state->matches);
+  state->cursor = 0;
   state->entries = (StateEntryList)LIST_INIT;
   state->selected = 0;
   state->gen = 0;
@@ -75,34 +78,70 @@ bool state_push(struct state* state, const char* name, StrList argv) {
   return true;
 }
 
-bool state_query_append(struct state* state, Str text) {
-  if (!sb_append(&state->query, text))
-    return false;
-  return refilter(state);
+static bool is_cont(char c) {
+  return ((unsigned char)c & 0xC0) == 0x80;  // UTF-8 continuation byte
 }
 
-bool state_query_delete_prev(struct state* state) {
-  size_t len = state->query.len;
-  if (len == 0)
-    return true;
-  /* Back up over UTF-8 continuation bytes to the start of the last char. */
-  do
-    len--;
-  while (len > 0 && ((unsigned char)state->query.ptr[len] & 0xC0) == 0x80);
-  sb_truncate(&state->query, len);
-  return refilter(state);
-}
-
-bool state_query_delete_prev_word(struct state* state) {
-  size_t len = state->query.len;
-  if (len == 0)
-    return true;
+static size_t motion_target(const struct state* state,
+                            enum state_motion motion) {
   const char* q = state->query.ptr;
-  while (len > 0 && isspace((unsigned char)q[len - 1]))
-    len--;
-  while (len > 0 && !isspace((unsigned char)q[len - 1]))
-    len--;
-  sb_truncate(&state->query, len);
+  size_t len = state->query.len, i = state->cursor;
+  switch (motion) {
+    case STATE_MOTION_CHAR_LEFT:
+      if (i > 0)
+        do
+          i--;
+        while (i > 0 && is_cont(q[i]));
+      break;
+    case STATE_MOTION_CHAR_RIGHT:
+      if (i < len)
+        do
+          i++;
+        while (i < len && is_cont(q[i]));
+      break;
+    case STATE_MOTION_WORD_LEFT:
+      while (i > 0 && isspace((unsigned char)q[i - 1]))
+        i--;
+      while (i > 0 && !isspace((unsigned char)q[i - 1]))
+        i--;
+      break;
+    case STATE_MOTION_WORD_RIGHT:
+      while (i < len && isspace((unsigned char)q[i]))
+        i++;
+      while (i < len && !isspace((unsigned char)q[i]))
+        i++;
+      break;
+    case STATE_MOTION_START:
+      i = 0;
+      break;
+    case STATE_MOTION_END:
+      i = len;
+      break;
+  }
+  return i;
+}
+
+bool state_query_insert(struct state* state, Str text) {
+  if (!sb_insert(&state->query, state->cursor, text))
+    return false;
+  state->cursor += text.len;
+  return refilter(state);
+}
+
+bool state_query_delete(struct state* state, enum state_motion motion) {
+  size_t a = state->cursor, b = motion_target(state, motion);
+  if (a == b)
+    return true;
+  if (a > b) {
+    size_t t = a;
+    a = b;
+    b = t;
+  }
+  char* q = state->query.ptr;
+  size_t len = state->query.len;
+  memmove(q + a, q + b, len - b);
+  sb_truncate(&state->query, len - (b - a));
+  state->cursor = a;
   return refilter(state);
 }
 
@@ -110,7 +149,16 @@ bool state_query_clear(struct state* state) {
   if (state->query.len == 0)
     return true;
   sb_clear(&state->query);
+  state->cursor = 0;
   return refilter(state);
+}
+
+void state_cursor_move(struct state* state, enum state_motion motion) {
+  size_t i = motion_target(state, motion);
+  if (i == state->cursor)
+    return;
+  state->cursor = i;
+  state->gen++;
 }
 
 void state_select_next(struct state* state) {

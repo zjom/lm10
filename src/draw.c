@@ -71,14 +71,17 @@ void draw(const struct state* v,
   const double row_pad = 6;            // vertical padding inside each row
   size_t n = v->matches.len;
 
-  /* Query row: prompt + query text, then a bar for the cursor. */
+  /* Query row: prompt + query text, with a bar at the cursor. */
+  const Str prompt = STR("> ");
   StrBuf line = STRBUF_INIT;
-  sb_append(&line, STR("> "));
+  sb_append(&line, prompt);
   sb_append(&line, sb_str(&v->query));
   int qw, qh;
   pango_layout_set_text(layout, sb_cstr(&line), -1);
   pango_layout_get_pixel_size(layout, &qw, &qh);
   sb_free(&line);
+  PangoRectangle cur;
+  pango_layout_index_to_pos(layout, (int)(prompt.len + v->cursor), &cur);
 
   double row_h = dc->line_h + 2 * row_pad;
   double tw = dc->max_w > qw ? dc->max_w : qw, th = row_h * (n + 1);
@@ -95,7 +98,8 @@ void draw(const struct state* v,
   cairo_set_source_rgb(cr, 1, 1, 1);
   cairo_move_to(cr, tx, ty + row_pad);
   pango_cairo_show_layout(cr, layout);
-  cairo_rectangle(cr, tx + qw + 2, ty + row_pad, 2, qh);  // cursor
+  cairo_rectangle(cr, tx + (double)cur.x / PANGO_SCALE, ty + row_pad, 2,
+                  qh);  // cursor
   cairo_fill(cr);
 
   /* Rows */

@@ -172,19 +172,49 @@ static void on_key(void* data, const struct kb_result* key) {
 
   switch (key->action) {
     case KB_ACTION_NONE:
-      ok = state_query_append(st, str_from_cstr(key->utf8));
+      ok = state_query_insert(st, str_from_cstr(key->utf8));
       break;
     case KB_ACTION_CANCEL:
       app->running = false;
       return;
     case KB_ACTION_DELETE_PREV:
-      ok = state_query_delete_prev(st);
+      ok = state_query_delete(st, STATE_MOTION_CHAR_LEFT);
       break;
     case KB_ACTION_DELETE_PREV_WORD:
-      ok = state_query_delete_prev_word(st);
+      ok = state_query_delete(st, STATE_MOTION_WORD_LEFT);
+      break;
+    case KB_ACTION_DELETE_NEXT:
+      ok = state_query_delete(st, STATE_MOTION_CHAR_RIGHT);
+      break;
+    case KB_ACTION_DELETE_NEXT_WORD:
+      ok = state_query_delete(st, STATE_MOTION_WORD_RIGHT);
+      break;
+    case KB_ACTION_DELETE_LINE_START:
+      ok = state_query_delete(st, STATE_MOTION_START);
+      break;
+    case KB_ACTION_DELETE_LINE_END:
+      ok = state_query_delete(st, STATE_MOTION_END);
       break;
     case KB_ACTION_DELETE_LINE:
       ok = state_query_clear(st);
+      break;
+    case KB_ACTION_CURSOR_LEFT:
+      state_cursor_move(st, STATE_MOTION_CHAR_LEFT);
+      break;
+    case KB_ACTION_CURSOR_RIGHT:
+      state_cursor_move(st, STATE_MOTION_CHAR_RIGHT);
+      break;
+    case KB_ACTION_CURSOR_WORD_LEFT:
+      state_cursor_move(st, STATE_MOTION_WORD_LEFT);
+      break;
+    case KB_ACTION_CURSOR_WORD_RIGHT:
+      state_cursor_move(st, STATE_MOTION_WORD_RIGHT);
+      break;
+    case KB_ACTION_CURSOR_START:
+      state_cursor_move(st, STATE_MOTION_START);
+      break;
+    case KB_ACTION_CURSOR_END:
+      state_cursor_move(st, STATE_MOTION_END);
       break;
     case KB_ACTION_MATCH_EXEC: {
       const struct state_entry* entry = state_get_selection(st);
