@@ -73,9 +73,10 @@ static int try_present(struct render* r) {
 int render_init(struct render* r,
                 struct wl_shm* shm,
                 struct wl_surface* surface,
-                const struct state* state) {
+                const struct state* state,
+                const struct config_ui* ui) {
   *r = (struct render){.surface = surface, .shm = shm, .state = state};
-  if (draw_ctx_init(&r->dctx) != 0) {
+  if (draw_ctx_init(&r->dctx, ui) != 0) {
     LOG_ERROR("failed to create font description");
     return -1;
   }

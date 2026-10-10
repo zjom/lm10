@@ -17,11 +17,6 @@
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-/* Surface height as a fraction of the output's logical height, and width as a
- * fraction of that height (< 1 keeps the surface taller than it is wide). */
-#define SURFACE_HEIGHT_FRACTION 0.6
-#define SURFACE_ASPECT 0.6
-
 static void wm_base_ping(void* data, struct xdg_wm_base* wm, uint32_t serial) {
   (void)data;
   xdg_wm_base_pong(wm, serial);
@@ -83,12 +78,14 @@ static void layer_surface_configure(void* data,
   struct wayl* wayl = data;
 
   if (!wayl->sized) {
-    /* Anchored to all edges, so w x h is the output's logical size. Shrink to
-     * a fraction of it; with no anchors the compositor centers us. Commit
+    /* Anchored to all edges, so w x h is the output's logical size. Let the
+     * app pick its size; with no anchors the compositor centers us. Commit
      * without a buffer and wait for the configure that carries our size. */
     if (w > 0 && h > 0) {
-      wayl->height = (int32_t)(h * SURFACE_HEIGHT_FRACTION);
-      wayl->width = MIN((int32_t)(wayl->height * SURFACE_ASPECT), (int32_t)w);
+      int sw = wayl->width, sh = wayl->height;
+      wayl->listener->size(wayl->data, (int)w, (int)h, &sw, &sh);
+      wayl->width = sw;
+      wayl->height = sh;
     }
     wayl->sized = true;
     zwlr_layer_surface_v1_set_anchor(surface, 0);

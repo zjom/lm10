@@ -65,5 +65,8 @@ void state_select_next(struct state* state);
 void state_select_prev(struct state* state);
 /* The i-th match. i must be < state->matches.len. */
 const struct state_entry* state_match(const struct state* state, size_t i);
+/* Byte offset of the query within the i-th match's name; the matched part is
+ * query.len bytes long. */
+size_t state_match_offset(const struct state* state, size_t i);
 const struct state_entry* state_get_selection(struct state* state);
 #endif  // !LM_STATE_H

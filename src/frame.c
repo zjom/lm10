@@ -38,7 +38,7 @@ enum lm_err frame_init(struct frame* f,
   }
 
   cairo_surface_t* cs = cairo_image_surface_create_for_data(
-      (unsigned char*)px, CAIRO_FORMAT_RGB24, w, h, stride);
+      (unsigned char*)px, CAIRO_FORMAT_ARGB32, w, h, stride);
   if (cairo_surface_status(cs) != CAIRO_STATUS_SUCCESS) {
     cairo_surface_destroy(cs);
     munmap(px, size);
@@ -48,7 +48,7 @@ enum lm_err frame_init(struct frame* f,
 
   struct wl_shm_pool* pool = wl_shm_create_pool(shm, fd, size);
   struct wl_buffer* buf =
-      wl_shm_pool_create_buffer(pool, 0, w, h, stride, WL_SHM_FORMAT_XRGB8888);
+      wl_shm_pool_create_buffer(pool, 0, w, h, stride, WL_SHM_FORMAT_ARGB8888);
   wl_shm_pool_destroy(pool);
   close(fd);
 

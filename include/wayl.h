@@ -18,6 +18,9 @@ struct wayl;
 
 /* How wayl talks to the app. All callbacks run from inside event dispatch. */
 struct wayl_listener {
+  /* Once, before the first configure: picks the surface size given the
+   * output's logical size. The compositor centers the surface. */
+  void (*size)(void* data, int out_w, int out_h, int* w, int* h);
   /* After ack_configure; the app must commit a buffer in response. */
   void (*configure)(void* data, int w, int h);
   void (*close)(void* data);

@@ -23,19 +23,24 @@ void state_destroy(struct state* state) {
   state->gen = 0;
 }
 
-/* ASCII case-insensitive substring search; an empty needle matches. */
-static bool contains_nocase(Str hay, Str needle) {
+/* ASCII case-insensitive substring search; an empty needle matches at 0.
+ * Returns STR_NPOS if there is no match. */
+static size_t find_nocase(Str hay, Str needle) {
   if (needle.len > hay.len)
-    return false;
+    return STR_NPOS;
   for (size_t i = 0; i + needle.len <= hay.len; i++) {
     size_t j = 0;
     while (j < needle.len && tolower((unsigned char)hay.ptr[i + j]) ==
                                  tolower((unsigned char)needle.ptr[j]))
       j++;
     if (j == needle.len)
-      return true;
+      return i;
   }
-  return false;
+  return STR_NPOS;
+}
+
+static bool contains_nocase(Str hay, Str needle) {
+  return find_nocase(hay, needle) != STR_NPOS;
 }
 
 static bool refilter(struct state* state) {
@@ -197,6 +202,10 @@ void state_select_prev(struct state* state) {
 
 const struct state_entry* state_match(const struct state* state, size_t i) {
   return &state->entries.ptr[state->matches.ptr[i]];
+}
+
+size_t state_match_offset(const struct state* state, size_t i) {
+  return find_nocase(state_match(state, i)->name, sb_str(&state->query));
 }
 
 const struct state_entry* state_get_selection(struct state* state) {

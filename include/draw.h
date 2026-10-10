@@ -1,23 +1,27 @@
 #ifndef LM_DRAW_H
 #define LM_DRAW_H
 
+#include "config.h"
 #include "state.h"
 
 #include <cairo.h>
 #include <pango/pango-font.h>
 
-#include <stdint.h>
+#include <stddef.h>
 
-/* Cached drawing resources */
+/* Cached drawing resources and view state */
 struct draw_ctx {
+  const struct config_ui* ui;  // not owned, must outlive the ctx
   PangoFontDescription* font;
-  // cached measurements, recomputed when the state changes
-  int max_w, line_h;
-  uint64_t measured_gen;
+  int line_h;    // text height in the configured font
+  size_t first;  // first visible match, kept so the selection stays in view
 };
 
-int draw_ctx_init(struct draw_ctx* dc);
+int draw_ctx_init(struct draw_ctx* dc, const struct config_ui* ui);
 void draw_ctx_destroy(struct draw_ctx* dc);
+
+/* The surface height that fits the query row and ui->lines rows. */
+int draw_height(const struct draw_ctx* dc);
 
 void draw(const struct state* v,
           struct draw_ctx* dc,

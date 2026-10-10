@@ -6,6 +6,8 @@
  * Build:
  * meson setup bld/debug && ninja -C bld/debug
  *
+ * The look is set in ~/.config/lm10/lm10.ini (or -c PATH); see config.h.
+ *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...):
  *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-D foot' |
  * ./bld/debug/lm10
@@ -13,8 +15,10 @@
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
@@ -225,6 +229,15 @@ static void on_entries(void* data) {
 
 /* ---- wayl callbacks ---- */
 
+static void on_size(void* data, int out_w, int out_h, int* w, int* h) {
+  struct app* app = data;
+  const struct config_ui* ui = &app->config.ui;
+  int want_w = ui->width_percent ? out_w * ui->width / 100 : ui->width;
+  int want_h = draw_height(&app->render.dctx);
+  *w = want_w < out_w ? want_w : out_w;
+  *h = want_h < out_h ? want_h : out_h;
+}
+
 static void on_configure(void* data, int w, int h) {
   struct app* app = data;
   render_resize(&app->render, w, h);
@@ -307,15 +320,77 @@ static void on_key(void* data, const struct kb_result* key) {
 }
 
 static const struct wayl_listener wayl_listener = {
+    .size = on_size,
     .configure = on_configure,
     .close = on_close,
     .key = on_key,
 };
 
 /* ---- main ---- */
-int main(void) {
+
+static void usage(FILE* f, const char* argv0) {
+  fprintf(f,
+          "usage: %s [-c CONFIG]\n"
+          "Reads entries from stdin, one per line:\n"
+          "  [-n NAME] [-i ICON] [-D] COMMAND [ARG...]\n"
+          "\n"
+          "  -c, --config PATH  config file (default: "
+          "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
+          "  -h, --help         show this help\n",
+          argv0);
+}
+
+/* Loads the built-in config, then the file. Returns false on a fatal error. */
+static bool load_config(struct config* cfg, const char* path) {
+  if (!config_load_defaults(cfg)) {
+    LOG_FATAL("failed to load default config");
+    return false;
+  }
+
+  StrBuf def = STRBUF_INIT;
+  if (path == NULL) {
+    if (!config_default_path(&def)) {
+      sb_free(&def);
+      return true; /* nowhere to look; the defaults will do */
+    }
+    path = sb_cstr(&def);
+  }
+  bool explicit_path = def.len == 0;
+  int ret = config_load_file(cfg, path);
+  if (ret == 1 && explicit_path)
+    LOG_ERROR("%s: no such file", path);
+  sb_free(&def);
+  return ret == 0 || (ret == 1 && !explicit_path);
+}
+
+int main(int argc, char** argv) {
   int err = 0;
   bool fdm_ok = false, wayl_ok = false, render_ok = false, input_ok = false;
+  const char* config_path = NULL;
+
+  static const struct option opts[] = {
+      {"config", required_argument, NULL, 'c'},
+      {"help", no_argument, NULL, 'h'},
+      {0},
+  };
+  int opt;
+  while ((opt = getopt_long(argc, argv, "c:h", opts, NULL)) != -1) {
+    switch (opt) {
+      case 'c':
+        config_path = optarg;
+        break;
+      case 'h':
+        usage(stdout, argv[0]);
+        return 0;
+      default:
+        usage(stderr, argv[0]);
+        return 1;
+    }
+  }
+  if (optind < argc) {
+    usage(stderr, argv[0]);
+    return 1;
+  }
 
   struct app app = {.running = true};
   config_init(&app.config);
@@ -328,8 +403,7 @@ int main(void) {
   }
   fdm_ok = true;
 
-  if (!config_load_defaults(&app.config)) {
-    LOG_FATAL("failed to load config");
+  if (!load_config(&app.config, config_path)) {
     err = 1;
     goto cleanup;
   }
@@ -348,8 +422,9 @@ int main(void) {
     goto cleanup;
   }
 
-  if (render_init(&app.render, app.wayl.shm, app.wayl.surface, &app.state) !=
-      0) {
+  /* Before the first configure is dispatched: on_size measures with it. */
+  if (render_init(&app.render, app.wayl.shm, app.wayl.surface, &app.state,
+                  &app.config.ui) != 0) {
     err = 1;
     goto cleanup;
   }

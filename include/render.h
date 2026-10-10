@@ -2,6 +2,7 @@
 #define LM_RENDER_H
 
 #include "common.h"
+#include "config.h"
 #include "draw.h"
 #include "frame.h"
 #include "state.h"
@@ -23,10 +24,12 @@ struct render {
   enum lm_err err;  // sticky; checked by the main loop
 };
 
+/* ui must outlive the render. */
 int render_init(struct render* r,
                 struct wl_shm* shm,
                 struct wl_surface* surface,
-                const struct state* state);
+                const struct state* state,
+                const struct config_ui* ui);
 void render_destroy(struct render* r);
 
 /* Sets the target size; takes effect on the next present. */

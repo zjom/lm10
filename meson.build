@@ -20,6 +20,7 @@ wayland_client = dependency('wayland-client', include_type: 'system')
 wayland_protocols = dependency('wayland-protocols', version: '>=1.21')
 pangocairo = dependency('pangocairo', include_type: 'system')
 xkbcommon = dependency('xkbcommon', include_type: 'system')
+m = meson.get_compiler('c').find_library('m', required: false)
 
 wayland_scanner_dep = dependency('wayland-scanner', native: true)
 wayland_scanner = find_program(
@@ -92,6 +93,7 @@ executable(
     wayland_client,
     pangocairo,
     xkbcommon,
+    m,
   ],
   install: true,
 )
