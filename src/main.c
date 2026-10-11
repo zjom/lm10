@@ -386,8 +386,10 @@ static const struct wayl_listener wayl_listener = {
 static void usage(FILE* f, const char* argv0) {
   fprintf(f,
           "usage: %s [-c CONFIG] [-o [SECTION.]KEY=VALUE]...\n"
+          "\n"
           "Reads entries from stdin, one per line:\n"
           "  [-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]\n"
+          "\n"
           "Picking one execs it (-x), runs it detached (-X), or else prints\n"
           "its command line to stdout.\n"
           "\n"
