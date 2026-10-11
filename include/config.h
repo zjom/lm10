@@ -110,13 +110,11 @@ struct config {
 void config_init(struct config* cfg);
 void config_destroy(struct config* cfg);
 
-/* Appends the built-in binds and sets the built-in ui. Returns false on
- * allocation failure. */
-bool config_load_defaults(struct config* cfg);
+/* Appends the built-in binds and sets the built-in ui. */
+void config_load_defaults(struct config* cfg);
 
 /* The default config file: $XDG_CONFIG_HOME/lm10/lm10.ini, falling back to
- * ~/.config/lm10/lm10.ini. Returns false if neither variable is set or on
- * allocation failure. */
+ * ~/.config/lm10/lm10.ini. Returns false if neither variable is set. */
 bool config_default_path(StrBuf* out);
 
 /* Applies an INI file on top of what cfg already holds:
@@ -142,20 +140,19 @@ bool config_default_path(StrBuf* out);
 int config_load_file(struct config* cfg, const char* path);
 
 /* Command-line flags, applied on top of what cfg already holds; values are read
- * as in the file, and bad ones are skipped with a warning. Each returns false
- * on allocation failure. */
+ * as in the file, and bad ones are skipped with a warning. */
 
 /* --KEY VAL sets [main] KEY to VAL, taken as is: not trimmed or unquoted. */
-bool config_set_main(struct config* cfg, const char* key, const char* val);
+void config_set_main(struct config* cfg, const char* key, const char* val);
 
 /* --color NAME=VALUE[,NAME=VALUE...] sets [colors] keys. */
-bool config_set_colors(struct config* cfg, const char* list);
+void config_set_colors(struct config* cfg, const char* list);
 
 /* --bind KEY=ACTIONS binds a key as a [keys] line does. */
-bool config_set_bind(struct config* cfg, const char* arg);
+void config_set_bind(struct config* cfg, const char* arg);
 
 /* Sets dst to s with each \n turned into a line break, as headers are
- * written. Returns false on allocation failure. */
-bool config_unescape(StrBuf* dst, Str s);
+ * written. */
+void config_unescape(StrBuf* dst, Str s);
 
 #endif  // !LM_CONFIG_H

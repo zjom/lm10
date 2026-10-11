@@ -33,12 +33,12 @@ void config_destroy(struct config* cfg) {
   sb_free(&cfg->ui.icon_theme);
 }
 
-static bool set_str(StrBuf* dst, Str s) {
+static void set_str(StrBuf* dst, Str s) {
   sb_clear(dst);
-  return sb_append(dst, s);
+  sb_append(dst, s);
 }
 
-bool config_unescape(StrBuf* dst, Str s) {
+void config_unescape(StrBuf* dst, Str s) {
   sb_clear(dst);
   Str before, after;
   while (str_cut(s, STR("\\n"), &before, &after)) {
@@ -46,7 +46,7 @@ bool config_unescape(StrBuf* dst, Str s) {
     sb_append_char(dst, '\n');
     s = after;
   }
-  return sb_append(dst, s);
+  sb_append(dst, s);
 }
 
 #define RGBA(hex)                                      \
@@ -54,7 +54,7 @@ bool config_unescape(StrBuf* dst, Str s) {
                          ((hex) >> 16 & 0xff) / 255.0, \
                          ((hex) >> 8 & 0xff) / 255.0, ((hex) & 0xff) / 255.0})
 
-static bool load_default_ui(struct config_ui* ui) {
+static void load_default_ui(struct config_ui* ui) {
   ui->width = 600;
   ui->width_percent = false;
   ui->lines = 8;
@@ -85,11 +85,12 @@ static bool load_default_ui(struct config_ui* ui) {
       .header = RGBA(0x878787ff),
       .border_label = RGBA(0xcdcdcdff),
   };
-  return set_str(&ui->font, STR("Sans 13")) &&
-         set_str(&ui->prompt, STR("❯ ")) &&
-         set_str(&ui->placeholder, STR("Search…")) &&
-         set_str(&ui->header, STR("")) && set_str(&ui->border_label, STR("")) &&
-         set_str(&ui->icon_theme, STR("hicolor"));
+  set_str(&ui->font, STR("Sans 13"));
+  set_str(&ui->prompt, STR("❯ "));
+  set_str(&ui->placeholder, STR("Search…"));
+  set_str(&ui->header, STR(""));
+  set_str(&ui->border_label, STR(""));
+  set_str(&ui->icon_theme, STR("hicolor"));
 }
 
 bool config_default_path(StrBuf* out) {
@@ -102,7 +103,7 @@ bool config_default_path(StrBuf* out) {
     sb_appendf(out, "%s/.config/lm10/lm10.ini", home);
   else
     return false;
-  return !out->failed;
+  return true;
 }
 
 /* ---- file parsing ---- */
@@ -237,7 +238,7 @@ const struct config_color_key config_color_keys[] = {
 const size_t config_n_color_keys =
     sizeof config_color_keys / sizeof config_color_keys[0];
 
-static bool set_main(struct config_ui* ui,
+static void set_main(struct config_ui* ui,
                      const struct loc* loc,
                      Str key,
                      Str val) {
@@ -248,15 +249,17 @@ static bool set_main(struct config_ui* ui,
   }
   if (k == NULL) {
     PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [main]", STR_ARG(key));
-    return true;
+    return;
   }
 
   void* field = (char*)ui + k->off;
   switch (k->kind) {
     case CONFIG_STRING:
-      return set_str(field, val);
+      set_str(field, val);
+      break;
     case CONFIG_TEXT:
-      return config_unescape(field, val);
+      config_unescape(field, val);
+      break;
     case CONFIG_INT:
       if (!parse_int(val, k->min, 1000, field))
         PARSE_WARN(loc, "%s must be a number from %d to 1000", k->name, k->min);
@@ -285,7 +288,6 @@ static bool set_main(struct config_ui* ui,
                    "border-label-pos must be N, N:top or N:bottom (0 centers)");
       break;
   }
-  return true;
 }
 
 static void set_color(struct config_colors* c,
@@ -321,17 +323,16 @@ static char arg_closer(char c) {
 
 /* action[+action...], each action a name optionally followed by an argument
  * in (), [], {} or <>; or none. Fills out, whose arguments are copied into
- * arena. Returns 1, 0 if val is malformed (having warned), or -1 on
- * allocation failure. */
-static int parse_actions(Arena* arena,
+ * arena. Returns false if val is malformed (having warned). */
+static bool parse_actions(Arena* arena,
                          const struct loc* loc,
                          Str val,
                          ActionList* out) {
   if (str_eq_nocase(val, STR("none")))
-    return 1;
+    return true;
   if (val.len == 0) {
     PARSE_WARN(loc, "%s", "expected actions, or none");
-    return 0;
+    return false;
   }
 
   Str rest = val;
@@ -345,54 +346,49 @@ static int parse_actions(Arena* arena,
     struct action a = {.arg = STR("")};
     if (!action_from_name(name, &a.kind)) {
       PARSE_WARN(loc, "unknown action \"" STR_FMT "\"", STR_ARG(name));
-      return 0;
+      return false;
     }
     char closer = rest.len > 0 ? arg_closer(rest.ptr[0]) : 0;
     if (closer) {
       size_t end = str_find_char(rest, closer);
       if (end == STR_NPOS) {
         PARSE_WARN(loc, "missing '%c' after " STR_FMT, closer, STR_ARG(name));
-        return 0;
+        return false;
       }
       a.arg = str_arena_dup(arena, str_slice(rest, 1, end));
-      if (a.arg.ptr == NULL)
-        return -1;
       rest = str_slice(rest, end + 1, rest.len);
     }
     if (action_takes_arg(a.kind) != (closer != 0)) {
       PARSE_WARN(loc, STR_FMT " %s", STR_ARG(name),
                  closer ? "takes no argument" : "needs an argument");
-      return 0;
+      return false;
     }
-    if (!LIST_PUSH(out, a))
-      return -1;
+    LIST_PUSH(out, a);
 
     rest = str_trim_left(rest);
     if (rest.len == 0)
-      return 1;
+      return true;
     if (rest.ptr[0] != '+') {
       PARSE_WARN(loc, "expected '+' after " STR_FMT, STR_ARG(name));
-      return 0;
+      return false;
     }
     rest = str_slice(rest, 1, rest.len);
   }
 }
 
 /* Key = actions binds the key, replacing what it did before. A malformed
- * line leaves it as it was. Returns false on allocation failure. */
-static bool set_key(struct config* cfg,
+ * line leaves it as it was. */
+static void set_key(struct config* cfg,
                     const struct loc* loc,
                     Str key,
                     Str val) {
   struct config_bind b = {.actions = LIST_INIT_ARENA(&cfg->arena)};
   if (!kb_parse_keypress(key, &b.key)) {
     PARSE_WARN(loc, "bad key \"" STR_FMT "\" in [keys]", STR_ARG(key));
-    return true;
+    return;
   }
-  int ret = parse_actions(&cfg->arena, loc, val, &b.actions);
-  if (ret <= 0)
-    return ret == 0;
-  return LIST_PUSH(&cfg->binds, b);
+  if (parse_actions(&cfg->arena, loc, val, &b.actions))
+    LIST_PUSH(&cfg->binds, b);
 }
 
 enum section { SECTION_NONE, SECTION_MAIN, SECTION_COLORS, SECTION_KEYS };
@@ -409,9 +405,8 @@ static bool parse_section(Str name, enum section* out) {
   return true;
 }
 
-/* Applies key = val, as given, to section. Returns false on allocation
- * failure. */
-static bool set_raw(struct config* cfg,
+/* Applies key = val, as given, to section. */
+static void set_raw(struct config* cfg,
                     const struct loc* loc,
                     enum section section,
                     Str key,
@@ -421,18 +416,19 @@ static bool set_raw(struct config* cfg,
       PARSE_WARN(loc, "%s", "key outside of a section");
       break;
     case SECTION_MAIN:
-      return set_main(&cfg->ui, loc, key, val);
+      set_main(&cfg->ui, loc, key, val);
+      break;
     case SECTION_COLORS:
       set_color(&cfg->ui.colors, loc, key, val);
       break;
     case SECTION_KEYS:
-      return set_key(cfg, loc, key, val);
+      set_key(cfg, loc, key, val);
+      break;
   }
-  return true;
 }
 
 /* set_raw with key and val trimmed and val unquoted. */
-static bool set_value(struct config* cfg,
+static void set_value(struct config* cfg,
                       const struct loc* loc,
                       enum section section,
                       Str key,
@@ -441,11 +437,10 @@ static bool set_value(struct config* cfg,
   val = str_trim(val);
   if (val.len >= 2 && val.ptr[0] == '"' && val.ptr[val.len - 1] == '"')
     val = str_slice(val, 1, val.len - 1);
-  return set_raw(cfg, loc, section, key, val);
+  set_raw(cfg, loc, section, key, val);
 }
 
-/* Returns false on allocation failure. */
-static bool parse(struct config* cfg, const char* path, Str text) {
+static void parse(struct config* cfg, const char* path, Str text) {
   struct loc loc = {.path = path};
   enum section section = SECTION_NONE;
   Str line;
@@ -475,21 +470,18 @@ static bool parse(struct config* cfg, const char* path, Str text) {
       PARSE_WARN(&loc, "%s", "expected key = value");
       continue;
     }
-    if (!set_value(cfg, &loc, section, key, val))
-      return false;
+    set_value(cfg, &loc, section, key, val);
   }
-  return true;
 }
 
-bool config_set_main(struct config* cfg, const char* key, const char* val) {
+void config_set_main(struct config* cfg, const char* key, const char* val) {
   char path[64];
   snprintf(path, sizeof path, "--%s", key);
   struct loc loc = {.path = path};
-  return set_raw(cfg, &loc, SECTION_MAIN, str_from_cstr(key),
-                 str_from_cstr(val));
+  set_raw(cfg, &loc, SECTION_MAIN, str_from_cstr(key), str_from_cstr(val));
 }
 
-bool config_set_colors(struct config* cfg, const char* list) {
+void config_set_colors(struct config* cfg, const char* list) {
   struct loc loc = {.path = "--color"};
   Str rest = str_from_cstr(list), item;
   for (;;) {
@@ -501,18 +493,18 @@ bool config_set_colors(struct config* cfg, const char* list) {
     else
       set_value(cfg, &loc, SECTION_COLORS, key, val);
     if (!more)
-      return true;
+      return;
   }
 }
 
-bool config_set_bind(struct config* cfg, const char* arg) {
+void config_set_bind(struct config* cfg, const char* arg) {
   struct loc loc = {.path = "--bind"};
   Str key, val;
   if (!str_cut(str_from_cstr(arg), STR("="), &key, &val)) {
     PARSE_WARN(&loc, "%s", "expected KEY=ACTIONS");
-    return true;
+    return;
   }
-  return set_value(cfg, &loc, SECTION_KEYS, key, val);
+  set_value(cfg, &loc, SECTION_KEYS, key, val);
 }
 
 int config_load_file(struct config* cfg, const char* path) {
@@ -536,15 +528,14 @@ int config_load_file(struct config* cfg, const char* path) {
   if (read_err) {
     LOG_ERROR("%s: read failed", path);
     ret = -1;
-  } else if (text.failed || !parse(cfg, path, sb_str(&text))) {
-    LOG_ERROR("%s: allocation failed", path);
-    ret = -1;
+  } else {
+    parse(cfg, path, sb_str(&text));
   }
   sb_free(&text);
   return ret;
 }
 
-bool config_load_defaults(struct config* cfg) {
+void config_load_defaults(struct config* cfg) {
   static const struct {
     const char* key;
     const char* actions;
@@ -591,9 +582,8 @@ bool config_load_defaults(struct config* cfg) {
   struct loc loc = {.path = "defaults"};
   for (size_t i = 0; i < sizeof defaults / sizeof defaults[0]; i++) {
     loc.line = i + 1;
-    if (!set_key(cfg, &loc, str_from_cstr(defaults[i].key),
-                 str_from_cstr(defaults[i].actions)))
-      return false;
+    set_key(cfg, &loc, str_from_cstr(defaults[i].key),
+            str_from_cstr(defaults[i].actions));
   }
-  return load_default_ui(&cfg->ui);
+  load_default_ui(&cfg->ui);
 }

@@ -247,7 +247,7 @@ static bool run_action(struct app* app, const struct action* a) {
       break;
     case ACTION_CHANGE_HEADER: {
       StrBuf header = STRBUF_INIT;
-      ok = config_unescape(&header, a->arg);
+      config_unescape(&header, a->arg);
       state_set_header(st, sb_str(&header));
       sb_free(&header);
       break;
@@ -395,15 +395,12 @@ static void set_log_level(int verbose) {
 }
 
 /* Loads the built-in config, then the file, then the flags in order.
- * Returns false on a fatal error. */
+ * Returns false if the file couldn't be read. */
 static bool load_config(struct config* cfg,
                         const char* path,
                         const struct flag* flags,
                         size_t n_flags) {
-  if (!config_load_defaults(cfg)) {
-    LOG_FATAL("failed to load default config");
-    return false;
-  }
+  config_load_defaults(cfg);
 
   StrBuf def = STRBUF_INIT;
   bool explicit_path = path != NULL;
@@ -420,18 +417,12 @@ static bool load_config(struct config* cfg,
 
   for (size_t i = 0; i < n_flags; i++) {
     const struct flag* fl = &flags[i];
-    bool ok;
     if (fl->opt == OPT_COLOR)
-      ok = config_set_colors(cfg, fl->arg);
+      config_set_colors(cfg, fl->arg);
     else if (fl->opt == OPT_BIND)
-      ok = config_set_bind(cfg, fl->arg);
+      config_set_bind(cfg, fl->arg);
     else
-      ok = config_set_main(cfg, config_main_keys[fl->opt - OPT_MAIN].name,
-                           fl->arg);
-    if (!ok) {
-      LOG_FATAL("flags: allocation failed");
-      return false;
-    }
+      config_set_main(cfg, config_main_keys[fl->opt - OPT_MAIN].name, fl->arg);
   }
   return true;
 }

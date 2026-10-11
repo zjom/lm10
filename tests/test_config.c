@@ -38,7 +38,7 @@ static int load_text(struct config* cfg, const char* text) {
 static void test_defaults(void) {
   struct config cfg;
   config_init(&cfg);
-  CHECK(config_load_defaults(&cfg));
+  config_load_defaults(&cfg);
   CHECK_STR(sb_str(&cfg.ui.font), "Sans 13");
   CHECK(cfg.ui.width == 600 && !cfg.ui.width_percent);
   const struct config_bind* b = find_bind(&cfg, "Return");
@@ -50,7 +50,7 @@ static void test_defaults(void) {
 static void test_file(void) {
   struct config cfg;
   config_init(&cfg);
-  CHECK(config_load_defaults(&cfg));
+  config_load_defaults(&cfg);
   CHECK(load_text(&cfg,
                   "# comment\n"
                   "; also a comment\n"
@@ -124,7 +124,7 @@ static void test_bad_actions(void) {
   struct config cfg;
   config_init(&cfg);
   for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
-    CHECK(config_set_bind(&cfg, bad[i]));
+    config_set_bind(&cfg, bad[i]);
   CHECK(cfg.binds.len == 0);
   config_destroy(&cfg);
 }
@@ -132,14 +132,14 @@ static void test_bad_actions(void) {
 static void test_flags(void) {
   struct config cfg;
   config_init(&cfg);
-  CHECK(config_load_defaults(&cfg));
+  config_load_defaults(&cfg);
   /* Flag values are taken as is: not trimmed or unquoted. */
-  CHECK(config_set_main(&cfg, "prompt", " \"x\" "));
+  config_set_main(&cfg, "prompt", " \"x\" ");
   CHECK_STR(sb_str(&cfg.ui.prompt), " \"x\" ");
-  CHECK(config_set_colors(&cfg, "text=#000000, border = #ffffff,bad"));
+  config_set_colors(&cfg, "text=#000000, border = #ffffff,bad");
   CHECK(cfg.ui.colors.text.r == 0.0);
   CHECK(cfg.ui.colors.border.r == 1.0);
-  CHECK(config_set_bind(&cfg, "Control+q=cancel"));
+  config_set_bind(&cfg, "Control+q=cancel");
   CHECK(find_bind(&cfg, "Control+q") != NULL);
   config_destroy(&cfg);
 }
