@@ -65,12 +65,20 @@ third_party_inc = include_directories(
   is_system: true,
 )
 
+# ztd allocates through util's xmalloc, so util links after it.
+util_lib = static_library(
+  'lm10-util',
+  'src/util.c',
+  include_directories: include_directories('include'),
+)
+
 third_party_lib = static_library(
   'lm10-third-party',
   'src/ztd.c',
   protocol_code,
   protocol_headers,
   include_directories: [include_directories('include'), third_party_inc],
+  link_with: util_lib,
   dependencies: [wayland_client],
   override_options: ['warning_level=0'],
 )
@@ -91,7 +99,6 @@ core_srcs = files(
   'src/shellwords.c',
   'src/spawn.c',
   'src/state.c',
-  'src/util.c',
   'src/wayl.c',
 )
 
