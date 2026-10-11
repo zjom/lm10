@@ -17,7 +17,8 @@ struct draw_ctx {
   int line_h;  // text height in the configured font; also the icon size
   struct icon_cache* icons;  // NULL if icons are off
   bool icon_column;          // rows leave room for icons; set once one loads
-  size_t first;  // first visible match, kept so the selection stays in view
+  size_t first;    // first visible match, kept so the selection stays in view
+  SpanList spans;  // scratch: a row's highlighted parts
 };
 
 int draw_ctx_init(struct draw_ctx* dc, const struct config_ui* ui);

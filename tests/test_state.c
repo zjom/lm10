@@ -23,17 +23,17 @@ static void check_matches(const struct state* st, const char* want) {
   sb_free(&got);
 }
 
-static void check_span(const struct state* st,
-                       size_t i,
-                       size_t want_start,
-                       size_t want_len) {
-  size_t start = 0, len = 0;
-  CHECK(state_match_span(st, i, &start, &len));
-  if (start != want_start || len != want_len) {
-    fprintf(stderr, "  span of %zu: got %zu+%zu, expected %zu+%zu\n", i, start,
-            len, want_start, want_len);
-    test_failures++;
+/* The i-th match's highlighted spans, as "start+len" joined by ' '. */
+static void check_spans(const struct state* st, size_t i, const char* want) {
+  SpanList spans = LIST_INIT;
+  CHECK(state_match_spans(st, i, &spans));
+  StrBuf got = STRBUF_INIT;
+  ARR_FOREACH(const struct state_span, sp, &spans) {
+    sb_appendf(&got, "%s%zu+%zu", got.len > 0 ? " " : "", sp->start, sp->len);
   }
+  CHECK_STR(sb_str(&got), want);
+  sb_free(&got);
+  LIST_FREE(&spans);
 }
 
 static void test_unicode_matching(void) {
@@ -47,7 +47,7 @@ static void test_unicode_matching(void) {
 
   CHECK(state_query_set(&st, STR("üb")));
   check_matches(&st, "Über|ÜBERALL|über");
-  check_span(&st, 0, 0, 3);  // Ü is two bytes
+  check_spans(&st, 0, "0+3");  // Ü is two bytes
 
   CHECK(state_query_set(&st, STR("SSE")));
   check_matches(&st, "");  // simple case mapping only: ß isn't ss
@@ -55,15 +55,14 @@ static void test_unicode_matching(void) {
   check_matches(&st, "Straße");
   CHECK(state_query_set(&st, STR("ASC")));
   check_matches(&st, "ascii");
-  check_span(&st, 0, 0, 3);
+  check_spans(&st, 0, "0+3");
   CHECK(state_query_set(&st, STR("ßE")));
-  check_span(&st, 0, 4, 3);
+  check_spans(&st, 0, "4+3");
 
   /* An empty query matches everything, with no span. */
   CHECK(state_query_clear(&st));
   CHECK(st.matches.len == 5);
-  size_t start, len;
-  CHECK(!state_match_span(&st, 0, &start, &len));
+  check_spans(&st, 0, "");
   state_destroy(&st);
 }
 
@@ -144,10 +143,58 @@ static void test_gen(void) {
   state_destroy(&st);
 }
 
+static void test_fuzzy(void) {
+  struct state st;
+  state_init(&st);
+  const char* names[] = {
+      "fabric",           // f-b with a gap
+      "foo bar",          // both on word boundaries
+      "firefox browser",  // likewise, further apart
+      "FooBar",           // camel case
+      "xfb",              // consecutive, but not at a boundary
+      "nothing",
+  };
+  for (size_t i = 0; i < sizeof names / sizeof names[0]; i++)
+    push(&st, names[i]);
+  state_set_fuzzy(&st, true);
+  check_matches(&st, "fabric|foo bar|firefox browser|FooBar|xfb|nothing");
+
+  CHECK(state_query_set(&st, STR("fb")));
+  /* Word starts beat gaps, which beat matching mid-word; ties keep entry
+   * order. firefox browser keeps its leading f rather than the shorter
+   * "fox b". */
+  check_matches(&st, "foo bar|FooBar|firefox browser|fabric|xfb");
+  check_spans(&st, 0, "0+1 4+1");
+  check_spans(&st, 2, "0+1 8+1");
+  check_spans(&st, 4, "1+2");  // one run: fb in xfb
+  CHECK(st.scores.len == st.matches.len);
+  for (size_t i = 1; i < st.scores.len; i++)
+    CHECK(st.scores.ptr[i - 1] >= st.scores.ptr[i]);
+
+  /* Narrowing keeps the ranking right. */
+  CHECK(state_query_insert(&st, STR("r")));
+  check_matches(&st, "firefox browser|fabric|foo bar|FooBar");
+
+  /* Entries arriving later go in by score; the selection stays put. */
+  state_select_next(&st);
+  push(&st, "f b r");
+  push(&st, "zzfzbzr");
+  CHECK(st.selected == 1);
+  check_matches(&st, "f b r|firefox browser|fabric|foo bar|FooBar|zzfzbzr");
+
+  /* Back to substrings, in entry order. */
+  state_set_fuzzy(&st, false);
+  check_matches(&st, "");
+  CHECK(state_query_set(&st, STR("b")));
+  check_matches(&st, "fabric|foo bar|firefox browser|FooBar|xfb|f b r|zzfzbzr");
+  state_destroy(&st);
+}
+
 int main(void) {
   RUN(test_unicode_matching);
   RUN(test_invalid_utf8);
   RUN(test_narrowing);
   RUN(test_gen);
+  RUN(test_fuzzy);
   return TEST_RESULT;
 }

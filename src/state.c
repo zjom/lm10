@@ -1,6 +1,7 @@
 #include "state.h"
 
 #include <ctype.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <glib.h>
@@ -11,6 +12,7 @@ void state_init(struct state* state) {
       .query = STRBUF_INIT,
       .needle = LIST_INIT,
       .matches = LIST_INIT,
+      .scores = LIST_INIT,
       .prompt = STRBUF_INIT,
       .header = STRBUF_INIT,
       .border_label = STRBUF_INIT,
@@ -23,6 +25,7 @@ void state_destroy(struct state* state) {
   sb_free(&state->query);
   LIST_FREE(&state->needle);
   LIST_FREE(&state->matches);
+  LIST_FREE(&state->scores);
   sb_free(&state->prompt);
   sb_free(&state->header);
   sb_free(&state->border_label);
@@ -31,25 +34,28 @@ void state_destroy(struct state* state) {
 
 /* ---- matching ---- */
 
-/* Finds the needle in hay, comparing lowercased code points. On a match,
- * sets the byte span it covers in hay; an empty needle matches at 0. hay
- * must be valid UTF-8. */
-static bool find(Str hay,
-                 const CodepointList* needle,
-                 size_t* start,
-                 size_t* len) {
+static uint32_t fold(const char* p) {
+  return g_unichar_tolower(g_utf8_get_char(p));
+}
+
+/* Finds the needle in hay as a substring, comparing lowercased code points.
+ * On a match, adds the byte span it covers to spans (if not NULL); an empty
+ * needle matches at 0. hay must be valid UTF-8. */
+static bool find_substring(Str hay,
+                           const CodepointList* needle,
+                           SpanList* spans) {
   const char* end = hay.ptr + hay.len;
   for (const char* p = hay.ptr;; p = g_utf8_next_char(p)) {
     const char* q = p;
     size_t j = 0;
-    while (j < needle->len && q < end &&
-           g_unichar_tolower(g_utf8_get_char(q)) == needle->ptr[j]) {
+    while (j < needle->len && q < end && fold(q) == needle->ptr[j]) {
       q = g_utf8_next_char(q);
       j++;
     }
     if (j == needle->len) {
-      *start = (size_t)(p - hay.ptr);
-      *len = (size_t)(q - p);
+      if (spans != NULL && q > p)
+        LIST_PUSH(spans, ((struct state_span){(size_t)(p - hay.ptr),
+                                              (size_t)(q - p)}));
       return true;
     }
     if (p >= end)
@@ -57,9 +63,161 @@ static bool find(Str hay,
   }
 }
 
-static bool matches(const struct state* state, size_t entry) {
-  size_t start, len;
-  return find(state->entries.ptr[entry].name, &state->needle, &start, &len);
+/* Character classes for fuzzy scoring, after fzf's. */
+enum char_class {
+  CLASS_SEP,
+  CLASS_LOWER,
+  CLASS_UPPER,
+  CLASS_DIGIT,
+  CLASS_OTHER
+};
+
+static enum char_class classify(gunichar c) {
+  if (g_unichar_isspace(c) ||
+      (c > 0 && c < 0x80 && strchr("-_./\\:,;()[]{}<>|'\"", (int)c) != NULL))
+    return CLASS_SEP;
+  if (g_unichar_islower(c))
+    return CLASS_LOWER;
+  if (g_unichar_isupper(c))
+    return CLASS_UPPER;
+  if (g_unichar_isdigit(c))
+    return CLASS_DIGIT;
+  return CLASS_OTHER;
+}
+
+enum {
+  SCORE_MATCH = 16,
+  SCORE_GAP_START = -3,
+  SCORE_GAP_EXTENSION = -1,
+  BONUS_BOUNDARY = 8,  // after a separator, or at the start
+  BONUS_CAMEL = 7,     // fooBar, foo1
+  BONUS_CONSECUTIVE = 4,
+  BONUS_FIRST_FACTOR = 2,  // the first character's bonus counts double
+};
+
+static int boundary_bonus(enum char_class prev, enum char_class cur) {
+  if (cur == CLASS_SEP)
+    return 0;
+  if (prev == CLASS_SEP)
+    return BONUS_BOUNDARY;
+  if ((prev == CLASS_LOWER && cur == CLASS_UPPER) ||
+      (prev != CLASS_DIGIT && cur == CLASS_DIGIT))
+    return BONUS_CAMEL;
+  return 0;
+}
+
+/* Scores matching the needle's characters, in order and as early as
+ * possible, within [start, stop) of hay, which must hold them all: on word
+ * boundaries and next to each other is better, gaps are worse. Adds the
+ * matched byte spans to spans, if not NULL. */
+static int32_t score_window(Str hay,
+                            const char* start,
+                            const char* stop,
+                            const CodepointList* needle,
+                            SpanList* spans) {
+  enum char_class prev = CLASS_SEP;
+  if (start > hay.ptr)
+    prev = classify(g_utf8_get_char(g_utf8_prev_char(start)));
+  int32_t total = 0;
+  int first_bonus = 0; /* of the run of consecutive matches going on */
+  bool in_gap = false, in_run = false;
+  size_t j = 0;
+  for (const char* p = start; p < stop; p = g_utf8_next_char(p)) {
+    gunichar c = g_utf8_get_char(p);
+    enum char_class cls = classify(c);
+    if (j < needle->len && g_unichar_tolower(c) == needle->ptr[j]) {
+      int bonus = boundary_bonus(prev, cls);
+      if (in_run) {
+        /* A run keeps the bonus of the boundary it started on. */
+        if (bonus < first_bonus)
+          bonus = first_bonus;
+        if (bonus < BONUS_CONSECUTIVE)
+          bonus = BONUS_CONSECUTIVE;
+      } else {
+        first_bonus = bonus;
+      }
+      total += SCORE_MATCH + (j == 0 ? bonus * BONUS_FIRST_FACTOR : bonus);
+      if (spans != NULL) {
+        size_t off = (size_t)(p - hay.ptr);
+        size_t len = (size_t)(g_utf8_next_char(p) - p);
+        struct state_span* last =
+            spans->len > 0 ? &spans->ptr[spans->len - 1] : NULL;
+        if (in_run && last != NULL && last->start + last->len == off)
+          last->len += len;
+        else
+          LIST_PUSH(spans, ((struct state_span){off, len}));
+      }
+      in_run = true;
+      in_gap = false;
+      j++;
+    } else {
+      total += in_gap ? SCORE_GAP_EXTENSION : SCORE_GAP_START;
+      in_gap = true;
+      in_run = false;
+    }
+    prev = cls;
+  }
+  return total;
+}
+
+/* Finds the needle's code points in hay in order, possibly apart, after
+ * fzf's v1 algorithm: the first occurrence going forward, and the shortest
+ * window ending where it does going back. Both windows are scored, and the
+ * better one counts: the shortest can lose a word-initial first character
+ * ("fb" in "firefox browser" shrinks to "fox b"). On a match, sets *score
+ * and adds the matched byte spans to spans, if not NULL. */
+static bool find_fuzzy(Str hay,
+                       const CodepointList* needle,
+                       int32_t* score,
+                       SpanList* spans) {
+  size_t n = needle->len;
+  *score = 0;
+  if (n == 0)
+    return true;
+
+  const char* end = hay.ptr + hay.len;
+  const char* first = NULL;
+  const char* p = hay.ptr;
+  size_t j = 0;
+  for (; p < end && j < n; p = g_utf8_next_char(p)) {
+    if (fold(p) == needle->ptr[j]) {
+      if (j == 0)
+        first = p;
+      j++;
+    }
+  }
+  if (j < n)
+    return false;
+  const char* stop = p; /* just past the last needle character */
+
+  const char* shortest = stop;
+  for (j = n; j > 0;) {
+    shortest = g_utf8_prev_char(shortest);
+    if (fold(shortest) == needle->ptr[j - 1])
+      j--;
+  }
+
+  const char* start = first;
+  *score = score_window(hay, first, stop, needle, NULL);
+  if (shortest != first) {
+    int32_t s = score_window(hay, shortest, stop, needle, NULL);
+    if (s > *score) {
+      *score = s;
+      start = shortest;
+    }
+  }
+  if (spans != NULL)
+    score_window(hay, start, stop, needle, spans);
+  return true;
+}
+
+/* Whether the entry matches the query, and how well (fuzzy only). */
+static bool matches(const struct state* state, size_t entry, int32_t* score) {
+  Str name = state->entries.ptr[entry].name;
+  *score = 0;
+  if (state->fuzzy)
+    return find_fuzzy(name, &state->needle, score, NULL);
+  return find_substring(name, &state->needle, NULL);
 }
 
 /* Lowercases the query into the needle. Returns false on allocation
@@ -68,10 +226,23 @@ static bool fold_query(struct state* state) {
   LIST_CLEAR(&state->needle);
   const char* end = state->query.ptr + state->query.len;
   for (const char* p = state->query.ptr; p < end; p = g_utf8_next_char(p)) {
-    if (!LIST_PUSH(&state->needle, g_unichar_tolower(g_utf8_get_char(p))))
+    if (!LIST_PUSH(&state->needle, fold(p)))
       return false;
   }
   return true;
+}
+
+struct ranked {
+  size_t entry;
+  int32_t score;
+};
+
+/* Better scores first, then entry order. */
+static int compare_ranked(const void* a, const void* b) {
+  const struct ranked *x = a, *y = b;
+  if (x->score != y->score)
+    return x->score > y->score ? -1 : 1;
+  return x->entry < y->entry ? -1 : x->entry > y->entry;
 }
 
 /* Recomputes the matches after a query change and selects the first. If
@@ -83,22 +254,61 @@ static bool refilter(struct state* state, bool narrowing) {
   if (!fold_query(state))
     return false;
 
-  if (narrowing) {
-    size_t kept = 0;
-    for (size_t i = 0; i < state->matches.len; i++) {
-      if (matches(state, state->matches.ptr[i]))
-        state->matches.ptr[kept++] = state->matches.ptr[i];
-    }
-    state->matches.len = kept;
-    return true;
+  /* Candidates, then the ones that match. */
+  size_t n = narrowing ? state->matches.len : state->entries.len;
+  struct ranked* ranked = NULL;
+  if (n > 0 && (ranked = malloc(n * sizeof *ranked)) == NULL)
+    return false;
+  size_t kept = 0;
+  for (size_t i = 0; i < n; i++) {
+    size_t entry = narrowing ? state->matches.ptr[i] : i;
+    int32_t score;
+    if (matches(state, entry, &score))
+      ranked[kept++] = (struct ranked){entry, score};
   }
+  if (state->fuzzy && state->needle.len > 0)
+    qsort(ranked, kept, sizeof *ranked, compare_ranked);
 
   LIST_CLEAR(&state->matches);
-  for (size_t i = 0; i < state->entries.len; i++) {
-    if (matches(state, i) && !LIST_PUSH(&state->matches, i))
-      return false;
+  LIST_CLEAR(&state->scores);
+  bool ok =
+      LIST_RESERVE(&state->matches, kept) && LIST_RESERVE(&state->scores, kept);
+  for (size_t i = 0; ok && i < kept; i++) {
+    LIST_PUSH(&state->matches, ranked[i].entry);
+    LIST_PUSH(&state->scores, ranked[i].score);
   }
-  return true;
+  free(ranked);
+  return ok;
+}
+
+/* Adds a new entry (the last one) to the matches if it matches, in its
+ * place by score. The selection stays where it is. */
+static bool add_match(struct state* state, size_t entry) {
+  int32_t score;
+  if (!matches(state, entry, &score))
+    return true;
+  size_t at = state->matches.len;
+  if (state->fuzzy && state->needle.len > 0) {
+    /* After every score at least as good: ties keep entry order. */
+    size_t lo = 0, hi = state->matches.len;
+    while (lo < hi) {
+      size_t mid = lo + (hi - lo) / 2;
+      if (state->scores.ptr[mid] >= score)
+        lo = mid + 1;
+      else
+        hi = mid;
+    }
+    at = lo;
+  }
+  return LIST_INSERT(&state->matches, at, entry) &&
+         LIST_INSERT(&state->scores, at, score);
+}
+
+void state_set_fuzzy(struct state* state, bool fuzzy) {
+  if (state->fuzzy == fuzzy)
+    return;
+  state->fuzzy = fuzzy;
+  refilter(state, false);
 }
 
 /* Sets b to s, with invalid UTF-8 replaced. Returns false on allocation
@@ -169,16 +379,14 @@ bool state_push(struct state* state,
     return false;
   state->gen++;
 
-  if (matches(state, state->entries.len - 1) &&
-      !LIST_PUSH(&state->matches, state->entries.len - 1))
-    return false;
-  return true;
+  return add_match(state, state->entries.len - 1);
 }
 
 void state_clear_entries(struct state* state) {
   arena_reset(&state->arena);
   state->entries = (StateEntryList)LIST_INIT_ARENA(&state->arena);
   LIST_CLEAR(&state->matches);
+  LIST_CLEAR(&state->scores);
   state->selected = 0;
   state->gen++;
 }
@@ -322,12 +530,17 @@ const struct state_entry* state_match(const struct state* state, size_t i) {
   return &state->entries.ptr[state->matches.ptr[i]];
 }
 
-bool state_match_span(const struct state* state,
-                      size_t i,
-                      size_t* start,
-                      size_t* len) {
-  return state->needle.len > 0 &&
-         find(state_match(state, i)->name, &state->needle, start, len);
+bool state_match_spans(const struct state* state, size_t i, SpanList* spans) {
+  LIST_CLEAR(spans);
+  if (state->needle.len == 0)
+    return true;
+  Str name = state_match(state, i)->name;
+  int32_t score;
+  if (state->fuzzy)
+    find_fuzzy(name, &state->needle, &score, spans);
+  else
+    find_substring(name, &state->needle, spans);
+  return !spans->failed;
 }
 
 const struct state_entry* state_get_selection(const struct state* state) {

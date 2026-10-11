@@ -56,6 +56,7 @@ struct config_ui {
   int border_width;
   int border_radius;
   int selection_radius;
+  bool fuzzy;            // match the query as a subsequence, best matches first
   bool show_counter;     // "matches/entries" at the right of the query row
   bool icons;            // draw entry icons
   StrBuf icon_theme;     // freedesktop icon theme to look them up in
@@ -75,6 +76,7 @@ enum config_kind {
   CONFIG_BOOL,       // yes/no, true/false, on/off, 1/0
   CONFIG_WIDTH,      // sets width and width_percent
   CONFIG_LABEL_POS,  // sets border_label_pos and border_label_bottom
+  CONFIG_MATCH,      // substring|fuzzy, sets fuzzy
 };
 
 struct config_key {

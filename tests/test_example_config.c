@@ -130,6 +130,7 @@ static void test_defaults(const char* path) {
         same = *(const int*)dv == *(const int*)ev;
         break;
       case CONFIG_BOOL:
+      case CONFIG_MATCH:
         same = *(const bool*)dv == *(const bool*)ev;
         break;
       case CONFIG_WIDTH:

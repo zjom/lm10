@@ -76,6 +76,11 @@ Control+r = change-prompt(📁 )+reload(fd -t d . ~)
 Control+x = execute(rm -- {1..})+reload(ls)
 ```
 
+Matching ignores case. By default the query must appear as is, and entries
+keep their order. With `match = fuzzy` (or `--match fuzzy`), its characters
+only have to appear in order, and the best matches come first: those on word
+boundaries and next to each other.
+
 `lm10 --help` gives a summary of the flags and actions.
 
 Logging defaults to warnings. `-v` adds debug output, and `-vv` adds trace

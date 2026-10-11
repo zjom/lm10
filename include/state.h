@@ -27,6 +27,13 @@ struct state_entry {
 typedef LIST(struct state_entry) StateEntryList;
 typedef LIST(size_t) IndexList;
 typedef LIST(uint32_t) CodepointList;
+typedef LIST(int32_t) ScoreList;
+
+/* A byte range of a name, e.g. where it matched the query. */
+struct state_span {
+  size_t start, len;
+};
+typedef LIST(struct state_span) SpanList;
 
 /* The app state that gets drawn. Every change to it bumps gen, so the
  * renderer can tell whether there is anything new to draw. */
@@ -36,10 +43,14 @@ struct state {
   StrBuf query;   // heap-backed, valid UTF-8
   size_t cursor;  // byte offset into query, on a UTF-8 char boundary
   /* The query lowercased, code point by code point: matched against names
-   * as a substring, ignoring case. Heap-backed. */
-  CodepointList needle;
-  IndexList matches;  // heap-backed; indices into entries, in entry order
-  size_t selected;    // index into matches
+   * ignoring case, as a substring, or with fuzzy as a subsequence. */
+  CodepointList needle;  // heap-backed
+  bool fuzzy;
+  /* Indices into entries: in entry order, or with fuzzy the best match
+   * first, with the score of each in scores. Heap-backed. */
+  IndexList matches;
+  ScoreList scores;
+  size_t selected;  // index into matches
   /* Texts drawn around the query; actions can change them. Heap-backed. */
   StrBuf prompt;
   StrBuf header;  // lines between the query and the rows; may be empty
@@ -89,16 +100,18 @@ bool state_set_prompt(struct state* state, Str text);
 bool state_set_header(struct state* state, Str text);
 bool state_set_border_label(struct state* state, Str text);
 
+/* Matches the query as a subsequence, ranking the best matches first,
+ * rather than as a substring in entry order. */
+void state_set_fuzzy(struct state* state, bool fuzzy);
+
 void state_select_next(struct state* state);
 void state_select_prev(struct state* state);
 /* The i-th match. i must be < state->matches.len. */
 const struct state_entry* state_match(const struct state* state, size_t i);
-/* Where the query is in the i-th match's name: its byte offset and length.
- * Returns false if the query is empty. */
-bool state_match_span(const struct state* state,
-                      size_t i,
-                      size_t* start,
-                      size_t* len);
+/* Sets spans to the byte ranges of the i-th match's name that matched the
+ * query: one for a substring, up to one per character when fuzzy, none
+ * for an empty query. Returns false on allocation failure. */
+bool state_match_spans(const struct state* state, size_t i, SpanList* spans);
 /* The selected match, or NULL if there are none. */
 const struct state_entry* state_get_selection(const struct state* state);
 

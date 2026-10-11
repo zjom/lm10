@@ -63,6 +63,7 @@ static bool load_default_ui(struct config_ui* ui) {
   ui->border_width = 2;
   ui->border_radius = 12;
   ui->selection_radius = 8;
+  ui->fuzzy = false;
   ui->show_counter = true;
   ui->icons = true;
   ui->border_label_pos = 0;
@@ -200,6 +201,7 @@ const struct config_key config_main_keys[] = {
     {"border-label-pos", "N[:top|:bottom]", CONFIG_LABEL_POS,
      UI(border_label_pos), 0},
     {"width", "N|N%", CONFIG_WIDTH, UI(width), 0},
+    {"match", "substring|fuzzy", CONFIG_MATCH, UI(fuzzy), 0},
     {"lines", "N", CONFIG_INT, UI(lines), 1},
     {"padding", "N", CONFIG_INT, UI(padding), 0},
     {"row-padding", "N", CONFIG_INT, UI(row_padding), 0},
@@ -267,6 +269,14 @@ static bool set_main(struct config_ui* ui,
       if (!parse_width(val, &ui->width, &ui->width_percent))
         PARSE_WARN(loc, "%s",
                    "width must be pixels (600) or a percentage (40%)");
+      break;
+    case CONFIG_MATCH:
+      if (str_eq_cstr(val, "substring"))
+        ui->fuzzy = false;
+      else if (str_eq_cstr(val, "fuzzy"))
+        ui->fuzzy = true;
+      else
+        PARSE_WARN(loc, "%s", "match must be substring or fuzzy");
       break;
     case CONFIG_LABEL_POS:
       if (!parse_label_pos(val, &ui->border_label_pos,

@@ -14,7 +14,7 @@
 #define ICON_GAP 8
 
 int draw_ctx_init(struct draw_ctx* dc, const struct config_ui* ui) {
-  *dc = (struct draw_ctx){.ui = ui};
+  *dc = (struct draw_ctx){.ui = ui, .spans = LIST_INIT};
   dc->font = pango_font_description_from_string(sb_cstr(&ui->font));
   if (dc->font == NULL)
     return -1;
@@ -44,6 +44,7 @@ void draw_ctx_destroy(struct draw_ctx* dc) {
   if (dc->font)
     pango_font_description_free(dc->font);
   icon_cache_destroy(dc->icons);
+  LIST_FREE(&dc->spans);
   *dc = (struct draw_ctx){0};
 }
 
@@ -153,20 +154,22 @@ static void show(cairo_t* cr,
   pango_cairo_show_layout(cr, layout);
 }
 
-static PangoAttrList* highlight(size_t start,
-                                size_t end,
-                                struct config_color c) {
+/* Attributes drawing the spans in c, bold. */
+static PangoAttrList* highlight(const SpanList* spans, struct config_color c) {
   PangoAttrList* attrs = pango_attr_list_new();
-  PangoAttribute* a[] = {
-      pango_attr_foreground_new((guint16)(c.r * 65535), (guint16)(c.g * 65535),
-                                (guint16)(c.b * 65535)),
-      pango_attr_foreground_alpha_new((guint16)(c.a * 65535)),
-      pango_attr_weight_new(PANGO_WEIGHT_BOLD),
-  };
-  for (size_t i = 0; i < sizeof a / sizeof a[0]; i++) {
-    a[i]->start_index = (guint)start;
-    a[i]->end_index = (guint)end;
-    pango_attr_list_insert(attrs, a[i]);
+  ARR_FOREACH(const struct state_span, sp, spans) {
+    PangoAttribute* a[] = {
+        pango_attr_foreground_new((guint16)(c.r * 65535),
+                                  (guint16)(c.g * 65535),
+                                  (guint16)(c.b * 65535)),
+        pango_attr_foreground_alpha_new((guint16)(c.a * 65535)),
+        pango_attr_weight_new(PANGO_WEIGHT_BOLD),
+    };
+    for (size_t i = 0; i < sizeof a / sizeof a[0]; i++) {
+      a[i]->start_index = (guint)sp->start;
+      a[i]->end_index = (guint)(sp->start + sp->len);
+      pango_attr_list_insert(attrs, a[i]);
+    }
   }
   return attrs;
 }
@@ -434,10 +437,9 @@ static void draw_rows(const struct state* state,
     pango_layout_set_width(
         layout, (int)((cw - 2 * ui->row_padding - icon_w) * PANGO_SCALE));
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-    size_t start, len;
-    if (state_match_span(state, i, &start, &len)) {
+    if (state_match_spans(state, i, &dc->spans) && dc->spans.len > 0) {
       PangoAttrList* attrs =
-          highlight(start, start + len, sel ? c->selection_match : c->match);
+          highlight(&dc->spans, sel ? c->selection_match : c->match);
       pango_layout_set_attributes(layout, attrs);
       pango_attr_list_unref(attrs);
     }

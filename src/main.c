@@ -564,6 +564,7 @@ int main(int argc, char** argv) {
     err = 1;
     goto cleanup;
   }
+  state_set_fuzzy(&app.state, ui->fuzzy);
 
   app.kb = kb_manager_new();
   if (app.kb == NULL || !load_binds(app.kb, &app.config)) {
