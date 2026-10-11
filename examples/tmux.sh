@@ -23,14 +23,14 @@ list() {
   sessions)
     tmux list-sessions -F '#{session_name}' 2>/dev/null |
       while IFS= read -r s; do
-        printf -- '-x -i utilities-terminal -n %q -- tmux %s %q\n' \
+        printf -- '-x -n %q -- tmux %s %q\n' \
           "$s" "${attach[*]}" "$s"
       done
     ;;
   zoxide)
     zoxide query -l | while IFS= read -r dir; do
       name=$(basename "$dir" | tr '.:' '__')
-      printf -- '-x -i folder -n %q -- tmux new-session -A -s %q -c %q\n' \
+      printf -- '-x -n %q -- tmux new-session -A -s %q -c %q\n' \
         "$dir" "$name" "$dir"
     done
     ;;
