@@ -78,6 +78,21 @@ static void test_bad_lines(void) {
   state_destroy(&st);
 }
 
+static void test_nul(void) {
+  struct state st;
+  state_init(&st);
+  struct entry_parser ep;
+  entry_parser_init(&ep, "test", &st);
+  static const char src[] = "rm a\0b\nok\n";
+  entry_parser_feed(&ep, str_from_parts(src, sizeof src - 1));
+  entry_parser_finish(&ep);
+  entry_parser_destroy(&ep);
+  CHECK(st.entries.len == 1);
+  if (st.entries.len == 1)
+    CHECK_STR(entry(&st, 0)->name, "ok");
+  state_destroy(&st);
+}
+
 static void test_brackets(void) {
   struct state st;
   state_init(&st);
@@ -91,6 +106,7 @@ static void test_brackets(void) {
 int main(void) {
   RUN(test_lines);
   RUN(test_bad_lines);
+  RUN(test_nul);
   RUN(test_brackets);
   return TEST_RESULT;
 }

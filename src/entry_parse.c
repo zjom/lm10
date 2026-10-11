@@ -16,6 +16,13 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
   bool err = false;
   Str word;
 
+  /* It would cut an argv word short, or the sh -c a placeholder ends up
+   * in. */
+  if (memchr(line, '\0', len) != NULL) {
+    LOG_WARN("%s: NUL byte in line, skipping", ep->name);
+    return false;
+  }
+
   LIST_CLEAR(&ep->words);
 
   /* options, up to the first word that isn't one (or "--") */
@@ -96,23 +103,25 @@ static bool drain_lines(struct entry_parser* ep, bool at_eof) {
   char* buf = ep->buf.ptr;
   size_t len = ep->buf.len;
   size_t pos = 0;
+  size_t from = ep->scanned;  // a long line is searched for '\n' only once
   bool pushed = false;
 
   while (pos < len) {
-    char* nl = memchr(buf + pos, '\n', len - pos);
+    char* nl = memchr(buf + from, '\n', len - from);
     if (nl == NULL) {
       if (!at_eof)
         break;
       nl = buf + len;
     }
     pushed |= parse_line(ep, buf + pos, (size_t)(nl - (buf + pos)));
-    pos = (size_t)(nl - buf) + (nl < buf + len);
+    pos = from = (size_t)(nl - buf) + (nl < buf + len);
   }
 
   if (pos > 0) {
     memmove(buf, buf + pos, len - pos);
     sb_truncate(&ep->buf, len - pos);
   }
+  ep->scanned = len - pos;
   return pushed;
 }
 

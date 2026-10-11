@@ -25,8 +25,9 @@
 struct entry_parser {
   const char* name;  // where the entries come from, for warnings
   struct state* state;
-  StrBuf buf;     // heap-backed; bytes fed but not yet a complete entry
-  StrList words;  // heap-backed scratch; the current entry's command words
+  StrBuf buf;      // heap-backed; bytes fed but not yet a complete entry
+  size_t scanned;  // bytes at the start of buf known to hold no '\n'
+  StrList words;   // heap-backed scratch; the current entry's command words
 };
 
 void entry_parser_init(struct entry_parser* ep,
