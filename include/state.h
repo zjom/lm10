@@ -9,12 +9,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* What picking an entry does. */
+enum state_run {
+  STATE_RUN_PRINT,   // print the argv to stdout
+  STATE_RUN_EXEC,    // exec in place of lm10
+  STATE_RUN_DETACH,  // run in a new session, detached from lm10
+};
+
 struct state_entry {
   Str name;           // NUL-terminated, lives in the state arena
   StrList argv;       // each Str NUL-terminated, lives in the state arena
   Str icon;           // NUL-terminated, lives in the state arena
   bool icon_guessed;  // icon wasn't given; it is the command's basename
-  bool detached;      // run in a new session instead of in place of lm10
+  enum state_run run;
 };
 
 typedef LIST(struct state_entry) StateEntryList;
@@ -43,7 +50,7 @@ bool state_push(struct state* state,
                 Str name,
                 const StrList* argv,
                 Str icon,
-                bool detached);
+                enum state_run run);
 
 /* Cursor targets. Words are runs of non-space characters. */
 enum state_motion {

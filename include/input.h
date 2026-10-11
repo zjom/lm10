@@ -15,8 +15,11 @@
  *
  *   -n/--name NAME   display name; defaults to the command line
  *   -i/--icon ICON   display icon; defaults to the command's basename
- *   -D/--detached    run in a new session, detached from the terminal
+ *   -x/--exec        exec the command in place of lm10
+ *   -X/--detach      run the command in a new session, detached from lm10
  *
+ * Without -x or -X, picking the entry prints its command line, shell-quoted,
+ * to stdout. If both are given, the last one wins.
  * Long options also accept --opt=VALUE, and "--" ends the options. Malformed
  * lines are skipped with a warning. */
 struct input {

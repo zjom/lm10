@@ -1,7 +1,8 @@
 /*
  * lm10: a Wayland picker. Lists entries read from stdin, one per line as
- * `[-n NAME] [-i ICON] [-D] COMMAND [ARG...]`; typing filters them, C-n / C-p
- * move the selection, Return runs it.
+ * `[-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]`; typing filters them,
+ * C-n / C-p move the selection, Return picks it: -x execs it, -X runs it
+ * detached, and otherwise its command line is printed to stdout.
  *
  * Build:
  * meson setup bld/debug && ninja -C bld/debug
@@ -9,7 +10,7 @@
  * The look is set in ~/.config/lm10/lm10.ini (or -c PATH); see config.h.
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...):
- *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-D foot' |
+ *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-X foot' |
  * ./bld/debug/lm10
  */
 #include <assert.h>
@@ -43,9 +44,9 @@ struct app {
   struct state state;    // the state
   struct render render;  // presents the state
   bool running;
-  /* A non-detached entry to exec in place of lm10 once it has shut down,
+  /* A picked entry to print or exec in place of lm10 once it has shut down,
    * with the activation token to hand it. */
-  const struct state_entry* exec_pending;
+  const struct state_entry* pending;
   char* exec_token;
 };
 
@@ -78,6 +79,45 @@ static void set_activation_env(const char* xdg_activation_token) {
     /* And X11 startup notifications */
     setenv("DESKTOP_STARTUP_ID", xdg_activation_token, 1);
   }
+}
+
+/* Writes s to f, single-quoted unless it is made only of characters no shell
+ * treats specially. */
+static void print_quoted(FILE* f, Str s) {
+  static const char safe[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+      "0123456789@%+=:,./_-";
+  /* s is NUL-terminated, so strspn stops at its end at the latest */
+  bool plain = s.len > 0 && strspn(s.ptr, safe) == s.len;
+  if (plain) {
+    fwrite(s.ptr, 1, s.len, f);
+    return;
+  }
+  fputc('\'', f);
+  for (size_t i = 0; i < s.len; i++) {
+    if (s.ptr[i] == '\'')
+      fputs("'\\''", f);
+    else
+      fputc(s.ptr[i], f);
+  }
+  fputc('\'', f);
+}
+
+/* Prints the entry's argv to stdout as one shell-quoted line. Returns false
+ * if writing failed. */
+static bool print_entry(const struct state_entry* entry) {
+  size_t i = 0;
+  ARR_FOREACH(const Str, s, &entry->argv) {
+    if (i++ > 0)
+      fputc(' ', stdout);
+    print_quoted(stdout, *s);
+  }
+  fputc('\n', stdout);
+  if (fflush(stdout) != 0 || ferror(stdout)) {
+    LOG_ERROR("failed to write to stdout: %s", strerror(errno));
+    return false;
+  }
+  return true;
 }
 
 /* Replaces lm10 with the entry's command, so it keeps lm10's terminal,
@@ -194,13 +234,20 @@ out_free_argv:
 }
 
 static bool exec_selection(struct app* app, const struct state_entry* entry) {
-  char* xdg_activation_token = NULL;
-  get_xdg_activation_token(&app->wayl.seat, NULL, &xdg_activation_token);
   app->running = false;
 
-  if (!entry->detached) {
+  if (entry->run == STATE_RUN_PRINT) {
+    /* main prints it after tearing everything else down */
+    app->pending = entry;
+    return true;
+  }
+
+  char* xdg_activation_token = NULL;
+  get_xdg_activation_token(&app->wayl.seat, NULL, &xdg_activation_token);
+
+  if (entry->run == STATE_RUN_EXEC) {
     /* main execs it after tearing everything else down */
-    app->exec_pending = entry;
+    app->pending = entry;
     app->exec_token = xdg_activation_token;
     return true;
   }
@@ -339,7 +386,9 @@ static void usage(FILE* f, const char* argv0) {
   fprintf(f,
           "usage: %s [-c CONFIG]\n"
           "Reads entries from stdin, one per line:\n"
-          "  [-n NAME] [-i ICON] [-D] COMMAND [ARG...]\n"
+          "  [-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]\n"
+          "Picking one execs it (-x), runs it detached (-X), or else prints\n"
+          "its command line to stdout.\n"
           "\n"
           "  -c, --config PATH  config file (default: "
           "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
@@ -488,9 +537,14 @@ cleanup:
   kb_manager_destroy(app.kb); /* after wayl: it looks keys up in it */
   if (fdm_ok)
     fdm_destroy(&app.fdm);
-  if (err == 0 && app.exec_pending != NULL) {
-    exec_inplace(app.exec_pending, app.exec_token); /* entry is in state */
-    err = 1;
+  if (err == 0 && app.pending != NULL) { /* entry is in state */
+    if (app.pending->run == STATE_RUN_PRINT) {
+      if (!print_entry(app.pending))
+        err = 1;
+    } else {
+      exec_inplace(app.pending, app.exec_token);
+      err = 1;
+    }
   }
   free(app.exec_token);
   state_destroy(&app.state);

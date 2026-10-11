@@ -60,11 +60,11 @@ bool state_push(struct state* state,
                 Str name,
                 const StrList* argv,
                 Str icon,
-                bool detached) {
+                enum state_run run) {
   struct state_entry e = {
       .argv = LIST_INIT_ARENA(&state->arena),
       .icon = str_arena_dup(&state->arena, icon),
-      .detached = detached,
+      .run = run,
   };
   if (e.icon.ptr == NULL || !LIST_RESERVE(&e.argv, argv->len)) {
     return false;
