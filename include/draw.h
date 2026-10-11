@@ -13,7 +13,7 @@
 struct draw_ctx {
   const struct config_ui* ui;  // not owned, must outlive the ctx
   PangoFontDescription* font;
-  int line_h;  // text height in the configured font
+  int line_h;      // text height in the configured font
   size_t first;    // first visible match, kept so the selection stays in view
   SpanList spans;  // scratch: a row's highlighted parts
 };

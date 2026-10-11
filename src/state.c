@@ -323,7 +323,7 @@ void state_push(struct state* state,
   };
   LIST_RESERVE(&e.argv, argv->len);
   ARR_FOREACH(const Str, w, argv)
-    LIST_PUSH(&e.argv, str_arena_dup(&state->arena, *w));
+  LIST_PUSH(&e.argv, str_arena_dup(&state->arena, *w));
 
   /* The name is drawn and matched as text, so it must be valid UTF-8. */
   StrBuf b = STRBUF_INIT_ARENA(&state->arena);

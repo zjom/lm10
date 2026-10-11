@@ -461,8 +461,8 @@ int main(int argc, char** argv) {
   }
 
   /* Before the first configure is dispatched: on_size measures with it. */
-  if (render_init(&app.render, app.wayl->shm, app.wayl->surface,
-                  &app.state, &app.config.ui) != 0) {
+  if (render_init(&app.render, app.wayl->shm, app.wayl->surface, &app.state,
+                  &app.config.ui) != 0) {
     err = 1;
     goto cleanup;
   }

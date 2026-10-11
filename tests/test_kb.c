@@ -1,5 +1,5 @@
-#include "kb.h"
 #include "config.h"
+#include "kb.h"
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon-names.h>
@@ -129,9 +129,9 @@ static void test_resolve(void) {
   config_init(&k.cfg);
 
   static const char* const binds[] = {
-      "Control+a=cancel", "Control+plus=cancel",    "Shift+1=cancel",
-      "Shift+Tab=cancel", "Tab=cancel",             "Shift+BackSpace=cancel",
-      "Control+w=cancel", "Control+A=cancel",       "Control+q=cancel",
+      "Control+a=cancel", "Control+plus=cancel", "Shift+1=cancel",
+      "Shift+Tab=cancel", "Tab=cancel",          "Shift+BackSpace=cancel",
+      "Control+w=cancel", "Control+A=cancel",    "Control+q=cancel",
       "Control+q=none",
   };
   for (size_t i = 0; i < sizeof binds / sizeof binds[0]; i++)

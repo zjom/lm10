@@ -319,9 +319,9 @@ static char arg_closer(char c) {
  * in (), [], {} or <>; or none. Fills out, whose arguments are copied into
  * arena. Returns false if val is malformed (having warned). */
 static bool parse_actions(Arena* arena,
-                         const struct loc* loc,
-                         Str val,
-                         ActionList* out) {
+                          const struct loc* loc,
+                          Str val,
+                          ActionList* out) {
   if (str_eq_nocase(val, STR("none")))
     return true;
   if (val.len == 0) {

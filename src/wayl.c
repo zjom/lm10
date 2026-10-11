@@ -572,9 +572,7 @@ static struct wayl* fail(struct wayl* w, const char* why) {
   return NULL;
 }
 
-struct wayl* wayl_new(struct fdm* fdm,
-                      struct app* app,
-                      const char* namespace) {
+struct wayl* wayl_new(struct fdm* fdm, struct app* app, const char* namespace) {
   struct wayl* w = xmalloc(sizeof *w);
   *w = (struct wayl){
       .seats = LIST_INIT,

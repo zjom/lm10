@@ -17,8 +17,8 @@ enum state_run {
 };
 
 struct state_entry {
-  Str name;           // valid UTF-8, NUL-terminated, lives in the state arena
-  StrList argv;       // each Str NUL-terminated, lives in the state arena
+  Str name;      // valid UTF-8, NUL-terminated, lives in the state arena
+  StrList argv;  // each Str NUL-terminated, lives in the state arena
   enum state_run run;
 };
 
@@ -52,7 +52,7 @@ struct state {
   /* In entry order, or with fuzzy the best match first once sorted.
    * Heap-backed. */
   MatchList matches;
-  size_t sorted;  // with fuzzy, matches before this one are ranked
+  size_t sorted;    // with fuzzy, matches before this one are ranked
   size_t selected;  // index into matches
   /* Texts drawn around the query; actions can change them. Heap-backed. */
   StrBuf prompt;

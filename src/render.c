@@ -23,10 +23,7 @@ static const struct wl_buffer_listener buffer_listener = {
 
 /* Sets up f as a w x h buffer. f must stay at this address while the buffer
  * exists. Dies if it can't. */
-static void frame_init(struct frame* f,
-                       struct render* r,
-                       int w,
-                       int h) {
+static void frame_init(struct frame* f, struct render* r, int w, int h) {
   int stride = w * 4;
   size_t size = (size_t)stride * h;
 
