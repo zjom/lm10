@@ -189,64 +189,91 @@ static bool parse_label_pos(Str v, int* out, bool* bottom) {
   return true;
 }
 
+#define UI(field) offsetof(struct config_ui, field)
+
+const struct config_key config_main_keys[] = {
+    {"font", "FONT", CONFIG_STRING, UI(font), 0},
+    {"prompt", "TEXT", CONFIG_STRING, UI(prompt), 0},
+    {"placeholder", "TEXT", CONFIG_STRING, UI(placeholder), 0},
+    {"header", "TEXT", CONFIG_TEXT, UI(header), 0},
+    {"border-label", "TEXT", CONFIG_STRING, UI(border_label), 0},
+    {"border-label-pos", "N[:top|:bottom]", CONFIG_LABEL_POS,
+     UI(border_label_pos), 0},
+    {"width", "N|N%", CONFIG_WIDTH, UI(width), 0},
+    {"lines", "N", CONFIG_INT, UI(lines), 1},
+    {"padding", "N", CONFIG_INT, UI(padding), 0},
+    {"row-padding", "N", CONFIG_INT, UI(row_padding), 0},
+    {"border-width", "N", CONFIG_INT, UI(border_width), 0},
+    {"border-radius", "N", CONFIG_INT, UI(border_radius), 0},
+    {"selection-radius", "N", CONFIG_INT, UI(selection_radius), 0},
+    {"show-counter", "yes|no", CONFIG_BOOL, UI(show_counter), 0},
+    {"icons", "yes|no", CONFIG_BOOL, UI(icons), 0},
+    {"icon-theme", "NAME", CONFIG_STRING, UI(icon_theme), 0},
+};
+const size_t config_n_main_keys =
+    sizeof config_main_keys / sizeof config_main_keys[0];
+
+#define COLOR(name, field) {name, offsetof(struct config_colors, field)}
+const struct config_color_key config_color_keys[] = {
+    COLOR("background", background),
+    COLOR("border", border),
+    COLOR("text", text),
+    COLOR("match", match),
+    COLOR("selection", selection),
+    COLOR("selection-text", selection_text),
+    COLOR("selection-match", selection_match),
+    COLOR("prompt", prompt),
+    COLOR("input", input),
+    COLOR("placeholder", placeholder),
+    COLOR("cursor", cursor),
+    COLOR("counter", counter),
+    COLOR("separator", separator),
+    COLOR("header", header),
+    COLOR("border-label", border_label),
+};
+#undef COLOR
+const size_t config_n_color_keys =
+    sizeof config_color_keys / sizeof config_color_keys[0];
+
 static bool set_main(struct config_ui* ui,
                      const struct loc* loc,
                      Str key,
                      Str val) {
-  static const struct {
-    const char* name;
-    size_t off;
-    int min;
-  } ints[] = {
-      {"lines", offsetof(struct config_ui, lines), 1},
-      {"padding", offsetof(struct config_ui, padding), 0},
-      {"row-padding", offsetof(struct config_ui, row_padding), 0},
-      {"border-width", offsetof(struct config_ui, border_width), 0},
-      {"border-radius", offsetof(struct config_ui, border_radius), 0},
-      {"selection-radius", offsetof(struct config_ui, selection_radius), 0},
-  };
-  static const struct {
-    const char* name;
-    size_t off;
-  } strs[] = {
-      {"font", offsetof(struct config_ui, font)},
-      {"prompt", offsetof(struct config_ui, prompt)},
-      {"placeholder", offsetof(struct config_ui, placeholder)},
-      {"border-label", offsetof(struct config_ui, border_label)},
-      {"icon-theme", offsetof(struct config_ui, icon_theme)},
-  };
-
-  for (size_t i = 0; i < sizeof ints / sizeof ints[0]; i++) {
-    if (!str_eq_cstr(key, ints[i].name))
-      continue;
-    if (!parse_int(val, ints[i].min, 1000, (int*)((char*)ui + ints[i].off)))
-      PARSE_WARN(loc, "%s must be a number from %d to 1000", ints[i].name,
-                 ints[i].min);
+  const struct config_key* k = NULL;
+  for (size_t i = 0; i < config_n_main_keys && k == NULL; i++) {
+    if (str_eq_cstr(key, config_main_keys[i].name))
+      k = &config_main_keys[i];
+  }
+  if (k == NULL) {
+    PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [main]", STR_ARG(key));
     return true;
   }
-  for (size_t i = 0; i < sizeof strs / sizeof strs[0]; i++) {
-    if (str_eq_cstr(key, strs[i].name))
-      return set_str((StrBuf*)((char*)ui + strs[i].off), val);
-  }
 
-  if (str_eq_cstr(key, "header"))
-    return config_unescape(&ui->header, val);
-
-  if (str_eq_cstr(key, "width")) {
-    if (!parse_width(val, &ui->width, &ui->width_percent))
-      PARSE_WARN(loc, "%s", "width must be pixels (600) or a percentage (40%)");
-  } else if (str_eq_cstr(key, "border-label-pos")) {
-    if (!parse_label_pos(val, &ui->border_label_pos, &ui->border_label_bottom))
-      PARSE_WARN(loc, "%s",
-                 "border-label-pos must be N, N:top or N:bottom (0 centers)");
-  } else if (str_eq_cstr(key, "show-counter")) {
-    if (!parse_bool(val, &ui->show_counter))
-      PARSE_WARN(loc, "%s", "show-counter must be yes or no");
-  } else if (str_eq_cstr(key, "icons")) {
-    if (!parse_bool(val, &ui->icons))
-      PARSE_WARN(loc, "%s", "icons must be yes or no");
-  } else {
-    PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [main]", STR_ARG(key));
+  void* field = (char*)ui + k->off;
+  switch (k->kind) {
+    case CONFIG_STRING:
+      return set_str(field, val);
+    case CONFIG_TEXT:
+      return config_unescape(field, val);
+    case CONFIG_INT:
+      if (!parse_int(val, k->min, 1000, field))
+        PARSE_WARN(loc, "%s must be a number from %d to 1000", k->name, k->min);
+      break;
+    case CONFIG_BOOL:
+      if (!parse_bool(val, field))
+        PARSE_WARN(loc, "%s must be yes or no", k->name);
+      break;
+    case CONFIG_WIDTH:
+      if (!parse_width(val, &ui->width, &ui->width_percent))
+        PARSE_WARN(loc, "%s",
+                   "width must be pixels (600) or a percentage (40%)");
+      break;
+    case CONFIG_LABEL_POS:
+      if (!parse_label_pos(val, &ui->border_label_pos,
+                           &ui->border_label_bottom))
+        PARSE_WARN(loc, "%s",
+                   "border-label-pos must be N, N:top or N:bottom (0 centers)");
+      break;
   }
   return true;
 }
@@ -255,68 +282,16 @@ static void set_color(struct config_colors* c,
                       const struct loc* loc,
                       Str key,
                       Str val) {
-  static const struct {
-    const char* name;
-    size_t off;
-  } names[] = {
-#define C(name, field) {name, offsetof(struct config_colors, field)}
-      C("background", background),
-      C("border", border),
-      C("text", text),
-      C("match", match),
-      C("selection", selection),
-      C("selection-text", selection_text),
-      C("selection-match", selection_match),
-      C("prompt", prompt),
-      C("input", input),
-      C("placeholder", placeholder),
-      C("cursor", cursor),
-      C("counter", counter),
-      C("separator", separator),
-      C("header", header),
-      C("border-label", border_label),
-#undef C
-  };
-  for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
-    if (!str_eq_cstr(key, names[i].name))
+  for (size_t i = 0; i < config_n_color_keys; i++) {
+    const struct config_color_key* k = &config_color_keys[i];
+    if (!str_eq_cstr(key, k->name))
       continue;
-    struct config_color* dst = (struct config_color*)((char*)c + names[i].off);
-    if (!parse_color(val, dst))
-      PARSE_WARN(loc, "%s must be #rrggbb or #rrggbbaa", names[i].name);
+    if (!parse_color(val, (struct config_color*)((char*)c + k->off)))
+      PARSE_WARN(loc, "%s must be #rrggbb or #rrggbbaa", k->name);
     return;
   }
   PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [colors]", STR_ARG(key));
 }
-
-static const struct {
-  const char* name;
-  enum action_kind kind;
-  bool takes_arg;
-} action_names[] = {
-    {"cancel", ACTION_CANCEL, false},
-    {"delete-prev", ACTION_DELETE_PREV, false},
-    {"delete-prev-word", ACTION_DELETE_PREV_WORD, false},
-    {"delete-next", ACTION_DELETE_NEXT, false},
-    {"delete-next-word", ACTION_DELETE_NEXT_WORD, false},
-    {"delete-line-start", ACTION_DELETE_LINE_START, false},
-    {"delete-line-end", ACTION_DELETE_LINE_END, false},
-    {"delete-line", ACTION_DELETE_LINE, false},
-    {"cursor-left", ACTION_CURSOR_LEFT, false},
-    {"cursor-right", ACTION_CURSOR_RIGHT, false},
-    {"cursor-word-left", ACTION_CURSOR_WORD_LEFT, false},
-    {"cursor-word-right", ACTION_CURSOR_WORD_RIGHT, false},
-    {"cursor-start", ACTION_CURSOR_START, false},
-    {"cursor-end", ACTION_CURSOR_END, false},
-    {"match-exec", ACTION_MATCH_EXEC, false},
-    {"match-next", ACTION_MATCH_NEXT, false},
-    {"match-prev", ACTION_MATCH_PREV, false},
-    {"change-prompt", ACTION_CHANGE_PROMPT, true},
-    {"change-query", ACTION_CHANGE_QUERY, true},
-    {"change-header", ACTION_CHANGE_HEADER, true},
-    {"change-border-label", ACTION_CHANGE_BORDER_LABEL, true},
-    {"reload", ACTION_RELOAD, true},
-    {"execute", ACTION_EXECUTE, true},
-};
 
 /* The closing delimiter for an argument opened with c, or 0. */
 static char arg_closer(char c) {
@@ -357,16 +332,11 @@ static int parse_actions(Arena* arena,
     Str name = str_trim(str_slice(rest, 0, i));
     rest = str_slice(rest, i, rest.len);
 
-    size_t n = 0;
-    while (n < sizeof action_names / sizeof action_names[0] &&
-           !str_eq_cstr(name, action_names[n].name))
-      n++;
-    if (n == sizeof action_names / sizeof action_names[0]) {
+    struct action a = {.arg = STR("")};
+    if (!action_from_name(name, &a.kind)) {
       PARSE_WARN(loc, "unknown action \"" STR_FMT "\"", STR_ARG(name));
       return 0;
     }
-
-    struct action a = {.kind = action_names[n].kind, .arg = STR("")};
     char closer = rest.len > 0 ? arg_closer(rest.ptr[0]) : 0;
     if (closer) {
       size_t end = str_find_char(rest, closer);
@@ -379,7 +349,7 @@ static int parse_actions(Arena* arena,
         return -1;
       rest = str_slice(rest, end + 1, rest.len);
     }
-    if (action_names[n].takes_arg != (closer != 0)) {
+    if (action_takes_arg(a.kind) != (closer != 0)) {
       PARSE_WARN(loc, STR_FMT " %s", STR_ARG(name),
                  closer ? "takes no argument" : "needs an argument");
       return 0;

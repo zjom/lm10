@@ -2,6 +2,55 @@
 
 #include "shell.h"
 
+static const struct {
+  const char* name;
+  bool takes_arg;
+} actions[] = {
+    [ACTION_CANCEL] = {"cancel", false},
+    [ACTION_DELETE_PREV] = {"delete-prev", false},
+    [ACTION_DELETE_PREV_WORD] = {"delete-prev-word", false},
+    [ACTION_DELETE_NEXT] = {"delete-next", false},
+    [ACTION_DELETE_NEXT_WORD] = {"delete-next-word", false},
+    [ACTION_DELETE_LINE_START] = {"delete-line-start", false},
+    [ACTION_DELETE_LINE_END] = {"delete-line-end", false},
+    [ACTION_DELETE_LINE] = {"delete-line", false},
+    [ACTION_CURSOR_LEFT] = {"cursor-left", false},
+    [ACTION_CURSOR_RIGHT] = {"cursor-right", false},
+    [ACTION_CURSOR_WORD_LEFT] = {"cursor-word-left", false},
+    [ACTION_CURSOR_WORD_RIGHT] = {"cursor-word-right", false},
+    [ACTION_CURSOR_START] = {"cursor-start", false},
+    [ACTION_CURSOR_END] = {"cursor-end", false},
+    [ACTION_MATCH_EXEC] = {"match-exec", false},
+    [ACTION_MATCH_NEXT] = {"match-next", false},
+    [ACTION_MATCH_PREV] = {"match-prev", false},
+    [ACTION_CHANGE_PROMPT] = {"change-prompt", true},
+    [ACTION_CHANGE_QUERY] = {"change-query", true},
+    [ACTION_CHANGE_HEADER] = {"change-header", true},
+    [ACTION_CHANGE_BORDER_LABEL] = {"change-border-label", true},
+    [ACTION_RELOAD] = {"reload", true},
+    [ACTION_EXECUTE] = {"execute", true},
+};
+_Static_assert(sizeof actions / sizeof actions[0] == ACTION_COUNT,
+               "every action needs a name");
+
+bool action_from_name(Str name, enum action_kind* kind) {
+  for (size_t i = 0; i < ACTION_COUNT; i++) {
+    if (str_eq_cstr(name, actions[i].name)) {
+      *kind = (enum action_kind)i;
+      return true;
+    }
+  }
+  return false;
+}
+
+const char* action_name(enum action_kind kind) {
+  return actions[kind].name;
+}
+
+bool action_takes_arg(enum action_kind kind) {
+  return actions[kind].takes_arg;
+}
+
 /* Parses a decimal index; an empty s leaves *out alone. */
 static bool parse_index(Str s, size_t* out) {
   uint64_t n;

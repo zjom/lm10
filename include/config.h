@@ -67,6 +67,37 @@ struct config_ui {
   struct config_colors colors;
 };
 
+/* How a [main] key's value is read. */
+enum config_kind {
+  CONFIG_STRING,
+  CONFIG_TEXT,       // a string in which \n breaks lines
+  CONFIG_INT,        // from min to 1000
+  CONFIG_BOOL,       // yes/no, true/false, on/off, 1/0
+  CONFIG_WIDTH,      // sets width and width_percent
+  CONFIG_LABEL_POS,  // sets border_label_pos and border_label_bottom
+};
+
+struct config_key {
+  const char* name;
+  const char* arg;  // what the value looks like, for --help
+  enum config_kind kind;
+  size_t off;  // of its field in struct config_ui
+  int min;     // CONFIG_INT only
+};
+
+/* Every [main] key; each can also be set with --KEY VALUE. */
+extern const struct config_key config_main_keys[];
+extern const size_t config_n_main_keys;
+
+struct config_color_key {
+  const char* name;
+  size_t off;  // of its field in struct config_colors
+};
+
+/* Every [colors] key. */
+extern const struct config_color_key config_color_keys[];
+extern const size_t config_n_color_keys;
+
 struct config {
   Arena arena;           // owns the binds' action lists and arguments
   ConfigBindList binds;  // Binds are applied in order, so a later bind for the

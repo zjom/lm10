@@ -36,8 +36,9 @@ enum action_kind {
   ACTION_CHANGE_HEADER,  // \n in arg breaks lines, as in the config
   ACTION_CHANGE_BORDER_LABEL,
   ACTION_RELOAD,   // sh -c arg; its output replaces the entries
-  ACTION_EXECUTE,  // sh -c arg, waited for
+  ACTION_EXECUTE,  // sh -c arg; the bind's later actions wait for it
 };
+#define ACTION_COUNT (ACTION_EXECUTE + 1)
 
 struct action {
   enum action_kind kind;
@@ -45,6 +46,13 @@ struct action {
 };
 
 typedef LIST(struct action) ActionList;
+
+/* The action called name (as in the config, e.g. "match-next"). Returns
+ * false if there is none. */
+bool action_from_name(Str name, enum action_kind* kind);
+const char* action_name(enum action_kind kind);
+/* Whether the action takes an argument, e.g. reload(CMD). */
+bool action_takes_arg(enum action_kind kind);
 
 /* Expands the placeholders in tmpl into out, each shell-quoted:
  *

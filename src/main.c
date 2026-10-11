@@ -300,7 +300,7 @@ static enum flow run_action(struct app* app, const struct action* a) {
       StrBuf cmd = STRBUF_INIT;
       enum flow flow = FLOW_NEXT;
       if (!action_expand(&cmd, a->arg, st)) {
-        LOG_WARN("command allocation failed");
+        LOG_WARN("%s: allocation failed", action_name(a->kind));
         flow = FLOW_STOP;
       } else if (a->kind == ACTION_EXECUTE) {
         flow = execute(app, sb_cstr(&cmd));
@@ -312,7 +312,7 @@ static enum flow run_action(struct app* app, const struct action* a) {
     }
   }
   if (!ok)
-    LOG_WARN("query allocation failed");
+    LOG_WARN("%s: allocation failed", action_name(a->kind));
   return FLOW_NEXT;
 }
 
@@ -360,28 +360,8 @@ static const struct wayl_listener wayl_listener = {
 
 /* ---- main ---- */
 
-/* The [main] keys, each settable with --KEY VALUE. */
-static const char* const main_keys[] = {
-    "font",
-    "prompt",
-    "placeholder",
-    "header",
-    "border-label",
-    "border-label-pos",
-    "width",
-    "lines",
-    "padding",
-    "row-padding",
-    "border-width",
-    "border-radius",
-    "selection-radius",
-    "show-counter",
-    "icons",
-    "icon-theme",
-};
-#define N_MAIN_KEYS (sizeof main_keys / sizeof main_keys[0])
-
-/* getopt_long values past the chars: --KEY is OPT_MAIN + its index */
+/* getopt_long values past the chars: --KEY is OPT_MAIN + its index in
+ * config_main_keys */
 enum { OPT_COLOR = 0x100, OPT_BIND, OPT_MAIN };
 
 /* A config flag as given, applied after the file. */
@@ -391,37 +371,38 @@ struct flag {
 };
 
 static void usage(FILE* f, const char* argv0) {
-  fprintf(
-      f,
-      "usage: %s [-c CONFIG] [--KEY VALUE]... [--color NAME=VALUE,...]...\n"
-      "       [--bind KEY=ACTIONS]...\n"
-      "\n"
-      "Reads entries from stdin, one per line:\n"
-      "  [-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]\n"
-      "or, if stdin starts with '{', '[' or a comment, as JSON(C) values,\n"
-      "each an entry object or an array of them:\n"
-      "  {\"name\": NAME, \"icon\": ICON, \"run\": \"print\"|\"exec\"|"
-      "\"detach\",\n"
-      "   \"command\": \"COMMAND ARG...\" | [COMMAND, ARG...]}\n"
-      "\n"
-      "Picking one execs it (-x, \"exec\"), runs it detached (-X,\n"
-      "\"detach\"), or else prints its command line to stdout.\n"
-      "Exits 0 once something was picked, 130 if nothing was, 1 on error.\n"
-      "\n"
-      "  -c, --config PATH  config file (default: "
-      "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
-      "  -h, --help         show this help\n"
-      "\n"
-      "These override the config file, in order (see lm10.ini):\n"
-      "  --font FONT        --prompt TEXT       --placeholder TEXT\n"
-      "  --header TEXT      --border-label TEXT --border-label-pos N[:SIDE]\n"
-      "  --width N|N%%       --lines N           --padding N\n"
-      "  --row-padding N    --border-width N    --border-radius N\n"
-      "  --selection-radius N                   --show-counter yes|no\n"
-      "  --icons yes|no     --icon-theme NAME\n"
+  fprintf(f,
+          "usage: %s [-v] [-c CONFIG] [--KEY VALUE]... [--color "
+          "NAME=VALUE,...]...\n"
+          "       [--bind KEY=ACTIONS]...\n"
+          "\n"
+          "Reads entries from stdin, one per line:\n"
+          "  [-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]\n"
+          "or, if stdin starts with '{', '[' or a comment, as JSON(C) values,\n"
+          "each an entry object or an array of them:\n"
+          "  {\"name\": NAME, \"icon\": ICON, \"run\": \"print\"|\"exec\"|"
+          "\"detach\",\n"
+          "   \"command\": \"COMMAND ARG...\" | [COMMAND, ARG...]}\n"
+          "\n"
+          "Picking one execs it (-x, \"exec\"), runs it detached (-X,\n"
+          "\"detach\"), or else prints its command line to stdout.\n"
+          "Exits 0 once something was picked, 130 if nothing was, 1 on error.\n"
+          "\n"
+          "  -c, --config PATH  config file (default: "
+          "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
+          "  -v, --verbose      log more; twice for even more (or set\n"
+          "                     LM10_LOG=error|warn|info|debug|trace)\n"
+          "  -h, --help         show this help\n"
+          "\n"
+          "These override the config file, in order (see lm10.ini):\n",
+          argv0);
+  for (size_t i = 0; i < config_n_main_keys; i++)
+    fprintf(f, "  --%s %s\n", config_main_keys[i].name,
+            config_main_keys[i].arg);
+  fputs(
       "  --color NAME=#rrggbb[aa][,NAME=...]  set [colors] keys\n"
       "  --bind KEY=ACTION[+ACTION...]        bind a key, or none\n"
-      "e.g. --width 40%% --bind Escape=cancel --color text=#ffffff\n"
+      "e.g. --width 40% --bind Escape=cancel --color text=#ffffff\n"
       "     --header 'Pick one\\nor not' --border-label ' lm10 '\n"
       "     --border-label-pos 10:bottom\n"
       "\n"
@@ -432,7 +413,35 @@ static void usage(FILE* f, const char* argv0) {
       "built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
       "{N..M} become the selection's command, name, the query and argv\n"
       "words, shell-quoted.\n",
-      argv0);
+      f);
+}
+
+/* Sets the log level from LM10_LOG, then raises it by verbose steps from
+ * the default, warnings. */
+static void set_log_level(int verbose) {
+  static const struct {
+    const char* name;
+    int level;
+  } levels[] = {
+      {"trace", LOG_LEVEL_TRACE}, {"debug", LOG_LEVEL_DEBUG},
+      {"info", LOG_LEVEL_INFO},   {"warn", LOG_LEVEL_WARN},
+      {"error", LOG_LEVEL_ERROR}, {"off", LOG_LEVEL_OFF},
+  };
+  int level = LOG_LEVEL_WARN;
+  const char* env = getenv("LM10_LOG");
+  if (env != NULL && env[0] != '\0') {
+    size_t i = 0;
+    while (i < sizeof levels / sizeof levels[0] &&
+           strcmp(env, levels[i].name) != 0)
+      i++;
+    if (i < sizeof levels / sizeof levels[0])
+      level = levels[i].level;
+    else
+      fprintf(stderr, "lm10: ignoring LM10_LOG=%s\n", env);
+  }
+  if (verbose > 0)
+    level = verbose == 1 ? LOG_LEVEL_DEBUG : LOG_LEVEL_TRACE;
+  log_set_level(level);
 }
 
 /* Loads the built-in config, then the file, then the flags in order.
@@ -467,7 +476,8 @@ static bool load_config(struct config* cfg,
     else if (fl->opt == OPT_BIND)
       ok = config_set_bind(cfg, fl->arg);
     else
-      ok = config_set_main(cfg, main_keys[fl->opt - OPT_MAIN], fl->arg);
+      ok = config_set_main(cfg, config_main_keys[fl->opt - OPT_MAIN].name,
+                           fl->arg);
     if (!ok) {
       LOG_FATAL("flags: allocation failed");
       return false;
@@ -489,27 +499,41 @@ int main(int argc, char** argv) {
     return EXIT_ERROR;
   }
 
-  struct option opts[4 + N_MAIN_KEYS + 1] = {
+  static const struct option fixed_opts[] = {
       {"config", required_argument, NULL, 'c'},
+      {"verbose", no_argument, NULL, 'v'},
       {"help", no_argument, NULL, 'h'},
       {"color", required_argument, NULL, OPT_COLOR},
       {"bind", required_argument, NULL, OPT_BIND},
   };
-  for (size_t i = 0; i < N_MAIN_KEYS; i++)
-    opts[4 + i] = (struct option){main_keys[i], required_argument, NULL,
-                                  OPT_MAIN + (int)i};
-  int opt;
-  while ((opt = getopt_long(argc, argv, "c:h", opts, NULL)) != -1) {
+  enum { N_FIXED = sizeof fixed_opts / sizeof fixed_opts[0] };
+  struct option* opts = calloc(N_FIXED + config_n_main_keys + 1, sizeof *opts);
+  if (opts == NULL) {
+    LOG_FATAL("allocation failed");
+    free(flags);
+    return EXIT_ERROR;
+  }
+  memcpy(opts, fixed_opts, sizeof fixed_opts);
+  for (size_t i = 0; i < config_n_main_keys; i++)
+    opts[N_FIXED + i] = (struct option){
+        config_main_keys[i].name, required_argument, NULL, OPT_MAIN + (int)i};
+  int opt, verbose = 0;
+  while ((opt = getopt_long(argc, argv, "c:vh", opts, NULL)) != -1) {
     switch (opt) {
       case 'c':
         config_path = optarg;
         break;
+      case 'v':
+        verbose++;
+        break;
       case 'h':
         usage(stdout, argv[0]);
+        free(opts);
         free(flags);
         return EXIT_SUCCESS;
       case '?':
         usage(stderr, argv[0]);
+        free(opts);
         free(flags);
         return EXIT_ERROR;
       default:
@@ -517,11 +541,13 @@ int main(int argc, char** argv) {
         break;
     }
   }
+  free(opts);
   if (optind < argc) {
     usage(stderr, argv[0]);
     free(flags);
     return EXIT_ERROR;
   }
+  set_log_level(verbose);
 
   struct app app = {.running = true};
   config_init(&app.config);

@@ -5,20 +5,25 @@
  *   LOG_INFO("server started on port %d", port);
  *   LOG_ERROR("open failed: %s", strerror(errno));
  *
+ * In exactly one .c file, define LOG_IMPLEMENTATION before including it:
+ * that file holds the runtime level and stream every file shares.
+ *
  * Compile-time filtering (calls below this level compile to nothing):
  *   cc -DLOG_LEVEL=LOG_LEVEL_WARN ...
  * Runtime filtering:
  *   log_set_level(LOG_LEVEL_DEBUG);
- * Disable colors:
+ * Colors are used when the stream is a terminal. Disable them entirely:
  *   cc -DLOG_NO_COLOR ...
  */
 #ifndef LOG_H
 #define LOG_H
 
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 
 #define LOG_LEVEL_TRACE 0
 #define LOG_LEVEL_DEBUG 1
@@ -41,9 +46,13 @@
 #define LOG_FILENAME_ \
   (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
 
-/* Runtime minimum level (one copy per translation unit; fine for most uses) */
-static int log_runtime_level_ = LOG_LEVEL_TRACE;
-static FILE* log_stream_ = NULL; /* NULL means stderr */
+/* Runtime minimum level and stream, shared by every file */
+extern int log_runtime_level_;
+extern FILE* log_stream_; /* NULL means stderr */
+#ifdef LOG_IMPLEMENTATION
+int log_runtime_level_ = LOG_LEVEL_TRACE;
+FILE* log_stream_ = NULL;
+#endif
 
 static inline void log_set_level(int level) {
   log_runtime_level_ = level;
@@ -74,14 +83,15 @@ static inline void log_write_(int level,
                               ...) {
   static const char* names[] = {"TRACE", "DEBUG", "INFO ",
                                 "WARN ", "ERROR", "FATAL"};
+  FILE* out = log_stream_ ? log_stream_ : stderr;
 #ifndef LOG_NO_COLOR
   static const char* colors[] = {"\x1b[90m", "\x1b[36m", "\x1b[32m",
                                  "\x1b[33m", "\x1b[31m", "\x1b[35m"};
-  const char *color = colors[level], *reset = "\x1b[0m";
+  bool tty = isatty(fileno(out));
+  const char *color = tty ? colors[level] : "", *reset = tty ? "\x1b[0m" : "";
 #else
   const char *color = "", *reset = "";
 #endif
-  FILE* out = log_stream_ ? log_stream_ : stderr;
   char ts[20], msg[1024];
   time_t now;
   struct tm* tm;
