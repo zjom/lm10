@@ -1,4 +1,4 @@
-foreach name : ['action', 'config', 'entry_parse', 'fdm', 'kb', 'shellwords']
+foreach name : ['action', 'config', 'entry_parse', 'fdm', 'kb', 'shellwords', 'spawn']
   test(
     name,
     executable(

@@ -85,7 +85,9 @@ core_srcs = files(
   'src/input.c',
   'src/kb.c',
   'src/render.c',
+  'src/shell.c',
   'src/shellwords.c',
+  'src/spawn.c',
   'src/state.c',
   'src/wayl.c',
 )

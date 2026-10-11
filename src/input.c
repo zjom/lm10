@@ -2,26 +2,24 @@
 
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <string.h>
 #include <sys/epoll.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "log.h"
+#include "spawn.h"
 
 /* Stops reading; at_eof says the command, if any, is done writing, so it is
- * waited for rather than killed. */
+ * left to exit rather than terminated. */
 static void stop(struct input* in, bool at_eof) {
   if (in->fd == -1)
     return;
   fdm_remove(in->fdm, in->fd);
   if (in->pid > 0) {
     close(in->fd);
+    /* procs reaps it; one still running is no longer wanted. */
     if (!at_eof)
-      kill(-in->pid, SIGTERM); /* its process group: sh and its children */
-    while (waitpid(in->pid, NULL, 0) == -1 && errno == EINTR)
-      ;
+      procs_terminate(in->procs, in->pid);
     in->pid = -1;
   }
   in->fd = -1;
@@ -97,6 +95,7 @@ int input_init(struct input* in,
 
 int input_init_command(struct input* in,
                        struct fdm* fdm,
+                       struct procs* procs,
                        const char* cmd,
                        struct state* state,
                        void (*on_change)(void* data),
@@ -106,31 +105,20 @@ int input_init_command(struct input* in,
     LOG_ERROR("reload: failed to create pipe: %s", strerror(errno));
     return -1;
   }
-
-  pid_t pid = fork();
+  /* Its own process group, so stop() can terminate whatever it started. */
+  pid_t pid = spawn_sh(cmd, fds[1], true);
+  close(fds[1]);
   if (pid == -1) {
-    LOG_ERROR("reload: fork failed: %s", strerror(errno));
     close(fds[0]);
-    close(fds[1]);
     return -1;
   }
-  if (pid == 0) {
-    /* Its own process group, so stop() can kill whatever it started. */
-    setpgid(0, 0);
-    int devnull = open("/dev/null", O_RDONLY | O_CLOEXEC);
-    if (devnull == -1 || dup2(devnull, STDIN_FILENO) == -1 ||
-        dup2(fds[1], STDOUT_FILENO) == -1)
-      _exit(127);
-    execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
-    _exit(127);
-  }
-  setpgid(pid, pid); /* as the child does, whichever runs first */
-  close(fds[1]);
+  procs_watch(procs, pid, true, NULL, NULL);
   /* Only our end: reads must never block the event loop. */
   fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL) | O_NONBLOCK);
 
   *in = (struct input){
       .fdm = fdm,
+      .procs = procs,
       .fd = fds[0],
       .pid = pid,
       .on_change = on_change,
@@ -140,9 +128,7 @@ int input_init_command(struct input* in,
   if (fdm_add(fdm, fds[0], EPOLLIN, on_readable, in, 0) != 0) {
     LOG_ERROR("reload: failed to watch output: %s", strerror(errno));
     close(fds[0]);
-    kill(-pid, SIGTERM);
-    while (waitpid(pid, NULL, 0) == -1 && errno == EINTR)
-      ;
+    procs_terminate(procs, pid);
     in->fd = -1;
     in->pid = -1;
     entry_parser_destroy(&in->parser);

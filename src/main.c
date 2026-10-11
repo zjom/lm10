@@ -19,16 +19,13 @@
  * ./bld/debug/lm10
  *   ./bld/debug/lm10 < examples/session.jsonc
  */
-#include <assert.h>
 #include <errno.h>
-#include <fcntl.h>
 #include <getopt.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/wait.h>
 #include <unistd.h>
 
 #include "action.h"
@@ -39,11 +36,14 @@
 #include "kb.h"
 #include "log.h"
 #include "render.h"
+#include "shell.h"
+#include "spawn.h"
 #include "state.h"
 #include "wayl.h"
 
 struct app {
   struct fdm fdm;
+  struct procs procs;  // reload and execute() commands
   struct config config;
   struct kb_manager* kb;
   struct input input;  // feeds entries from stdin into the state
@@ -52,39 +52,33 @@ struct app {
   struct render render;  // presents the state
   bool running;
   /* The picked entry, run once the event loop has stopped: nothing may
-   * change the state after it is set. */
+   * change the state after it is set. Without one, lm10 was cancelled. */
   const struct state_entry* pending;
+  /* An execute() is running: keys are ignored until it exits. If waiting,
+   * the rest of the bind's actions, from resume_action, run then. */
+  bool executing, waiting;
+  uint32_t resume_bind;
+  size_t resume_action;
+};
+
+/* Exit statuses */
+enum {
+  EXIT_PICKED = 0,
+  EXIT_ERROR = 1,
+  EXIT_CANCELLED = 130, /* nothing was picked, as in fzf */
 };
 
 /* A NULL-terminated argv pointing into entry, or NULL on allocation failure.
  * Free with free(). */
 static char** entry_argv(const struct state_entry* entry) {
-  /* +1 for the NULL terminator execvp requires */
-  char** argv = calloc(entry->argv.len + 1, sizeof(*argv));
+  char** argv = calloc(entry->argv.len + 1, sizeof *argv);
   if (argv == NULL) {
+    LOG_ERROR("allocation failed");
     return NULL;
   }
-
-  size_t i = 0;
-  ARR_FOREACH(const Str, s, &entry->argv) {
-    argv[i] = (char*)s->ptr;
-    assert(argv[i] != NULL);
-    i++;
-  }
-
-  LOG_DEBUG("argv:");
-  for (size_t j = 0; argv[j] != NULL; j++)
-    LOG_DEBUG("  %zu: \"%s\"", j, argv[j]);
+  for (size_t i = 0; i < entry->argv.len; i++)
+    argv[i] = (char*)entry->argv.ptr[i].ptr; /* NUL-terminated */
   return argv;
-}
-
-static void set_activation_env(const char* xdg_activation_token) {
-  if (xdg_activation_token != NULL) {
-    /* Prepare client for xdg activation startup */
-    setenv("XDG_ACTIVATION_TOKEN", xdg_activation_token, 1);
-    /* And X11 startup notifications */
-    setenv("DESKTOP_STARTUP_ID", xdg_activation_token, 1);
-  }
 }
 
 /* Prints the entry's argv to stdout as one shell-quoted line. Returns false
@@ -95,7 +89,7 @@ static bool print_entry(const struct state_entry* entry) {
   ARR_FOREACH(const Str, s, &entry->argv) {
     if (i++ > 0)
       sb_append_char(&line, ' ');
-    action_quote(&line, *s);
+    shell_quote(&line, *s);
   }
   sb_append_char(&line, '\n');
   bool ok = !line.failed;
@@ -110,119 +104,6 @@ static bool print_entry(const struct state_entry* entry) {
   return ok;
 }
 
-/* Replaces lm10 with the entry's command, so it keeps lm10's terminal,
- * session and stdout/stderr. Only returns on failure. */
-static void exec_inplace(const struct state_entry* entry,
-                         const char* xdg_activation_token) {
-  char** argv = entry_argv(entry);
-  if (argv == NULL) {
-    LOG_ERROR("argv allocation failed");
-    return;
-  }
-  set_activation_env(xdg_activation_token);
-
-  /* stdin carried the entry list; give the command the terminal instead */
-  if (!isatty(STDIN_FILENO)) {
-    int fd = open("/dev/tty", O_RDWR | O_CLOEXEC);
-    if (fd == -1)
-      fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
-    if (fd != -1) {
-      dup2(fd, STDIN_FILENO);
-      close(fd);
-    }
-  }
-
-  execvp(argv[0], argv);
-  LOG_ERROR("failed to execute: %s", strerror(errno));
-  free(argv);
-}
-
-static bool exec_entry(const struct state_entry* entry,
-                       const char* xdg_activation_token) {
-  bool ok = false;
-  char** argv = entry_argv(entry);
-  if (argv == NULL) {
-    return false;
-  }
-
-  int pipe_fds[2];
-  if (pipe2(pipe_fds, O_CLOEXEC) == -1) {
-    LOG_ERROR("failed to create pipe %s", strerror(errno));
-    goto out_free_argv;
-  }
-
-  pid_t pid = fork();
-  if (pid == -1) {
-    close(pipe_fds[0]);
-    close(pipe_fds[1]);
-    LOG_ERROR("failed to fork %s", strerror(errno));
-    goto out_free_argv;
-  }
-
-  if (pid == 0) {
-    /* Intermediate child */
-    close(pipe_fds[0]);
-    if (setsid() == -1)
-      goto child_err;
-
-    set_activation_env(xdg_activation_token);
-
-    pid_t gpid = fork();
-    if (gpid == -1)
-      goto child_err;
-    if (gpid > 0)
-      _exit(0); /* Grandchild gets reparented to init */
-
-    int devnull_r = open("/dev/null", O_RDONLY | O_CLOEXEC);
-    if (devnull_r == -1)
-      goto child_err;
-
-    if (dup2(devnull_r, STDIN_FILENO) == -1)
-      goto child_err;
-
-    execvp(argv[0], argv);
-
-  child_err: {
-    /* Signal error back to parent process */
-    int err = errno;
-    (void)!write(pipe_fds[1], &err, sizeof(err));
-    _exit(1);
-  }
-  }
-
-  /* Parent */
-  close(pipe_fds[1]);
-
-  int child_errno;
-  static_assert(sizeof(child_errno) == sizeof(errno), "errno size mismatch");
-
-  ssize_t ret;
-  do {
-    ret = read(pipe_fds[0], &child_errno, sizeof(child_errno));
-  } while (ret == -1 && errno == EINTR);
-  close(pipe_fds[0]);
-
-  /* Reap the intermediate child */
-  while (waitpid(pid, NULL, 0) == -1 && errno == EINTR)
-    ;
-  if (ret == 0) {
-    LOG_DEBUG("fork+exec succeeded");
-    ok = true;
-  } else {
-    if (ret == -1) {
-      LOG_ERROR("failed to read from pipe: %s", strerror(errno));
-    } else if (ret == sizeof(child_errno)) {
-      LOG_ERROR("failed to execute: %s", strerror(child_errno));
-    } else {
-      LOG_ERROR("short read from pipe");
-    }
-  }
-
-out_free_argv:
-  free(argv);
-  return ok;
-}
-
 /* Picks entry: the loop stops, and main runs it. */
 static void pick(struct app* app, const struct state_entry* entry) {
   app->pending = entry;
@@ -233,16 +114,19 @@ static void pick(struct app* app, const struct state_entry* entry) {
  * the activation token if there is one. Returns false on failure; doesn't
  * return if the entry execs in place of lm10. */
 static bool run_entry(const struct state_entry* entry, const char* token) {
-  switch (entry->run) {
-    case STATE_RUN_PRINT:
-      return print_entry(entry);
-    case STATE_RUN_EXEC:
-      exec_inplace(entry, token);
-      return false;
-    case STATE_RUN_DETACH:
-      return exec_entry(entry, token);
-  }
-  return false;
+  if (entry->run == STATE_RUN_PRINT)
+    return print_entry(entry);
+
+  char** argv = entry_argv(entry);
+  if (argv == NULL)
+    return false;
+  bool ok = false;
+  if (entry->run == STATE_RUN_EXEC)
+    spawn_exec(argv, token);
+  else
+    ok = spawn_detached(argv, token);
+  free(argv);
+  return ok;
 }
 
 static bool load_binds(struct kb_manager* kb, const struct config* cfg) {
@@ -294,19 +178,54 @@ static void on_close(void* data) {
 static bool reload(struct app* app, const char* cmd) {
   input_destroy(&app->input);
   state_clear_entries(&app->state);
-  return input_init_command(&app->input, &app->fdm, cmd, &app->state,
-                            on_entries, app) == 0;
+  return input_init_command(&app->input, &app->fdm, &app->procs, cmd,
+                            &app->state, on_entries, app) == 0;
 }
 
-/* Runs one action. Returns false if the ones after it shouldn't run. */
-static bool run_action(struct app* app, const struct action* a) {
+/* What happens after an action. */
+enum flow {
+  FLOW_NEXT, /* run the next one */
+  FLOW_STOP, /* skip the rest */
+  FLOW_WAIT, /* run the rest once the execute() it started exits */
+};
+
+static void run_actions(struct app* app, uint32_t bind, size_t from);
+
+static void on_execute_done(void* data, int status) {
+  (void)status;
+  struct app* app = data;
+  app->executing = false;
+  if (!app->waiting)
+    return; /* exited before run_action returned; it carries on itself */
+  app->waiting = false;
+  if (!app->running)
+    return;
+  run_actions(app, app->resume_bind, app->resume_action);
+  if (app->running)
+    render_request(&app->render);
+}
+
+/* Starts sh -c cmd, with its stdout on stderr so it can't disturb lm10's
+ * output. */
+static enum flow execute(struct app* app, const char* cmd) {
+  LOG_DEBUG("execute: %s", cmd);
+  pid_t pid = spawn_sh(cmd, STDERR_FILENO, false);
+  if (pid == -1)
+    return FLOW_NEXT;
+  app->executing = true;
+  procs_watch(&app->procs, pid, false, on_execute_done, app);
+  return app->executing ? FLOW_WAIT : FLOW_NEXT;
+}
+
+/* Runs one action. */
+static enum flow run_action(struct app* app, const struct action* a) {
   struct state* st = &app->state;
   bool ok = true;
 
   switch (a->kind) {
     case ACTION_CANCEL:
       app->running = false;
-      return false;
+      return FLOW_STOP;
     case ACTION_DELETE_PREV:
       ok = state_query_delete(st, STATE_MOTION_CHAR_LEFT);
       break;
@@ -349,9 +268,9 @@ static bool run_action(struct app* app, const struct action* a) {
     case ACTION_MATCH_EXEC: {
       const struct state_entry* entry = state_get_selection(st);
       if (entry == NULL)
-        return true;
+        return FLOW_NEXT;
       pick(app, entry);
-      return false;
+      return FLOW_STOP;
     }
     case ACTION_MATCH_NEXT:
       state_select_next(st);
@@ -376,40 +295,53 @@ static bool run_action(struct app* app, const struct action* a) {
     case ACTION_RELOAD:
     case ACTION_EXECUTE: {
       StrBuf cmd = STRBUF_INIT;
+      enum flow flow = FLOW_NEXT;
       if (!action_expand(&cmd, a->arg, st)) {
         LOG_WARN("command allocation failed");
-        sb_free(&cmd);
-        return false;
+        flow = FLOW_STOP;
+      } else if (a->kind == ACTION_EXECUTE) {
+        flow = execute(app, sb_cstr(&cmd));
+      } else if (!reload(app, sb_cstr(&cmd))) {
+        flow = FLOW_STOP;
       }
-      if (a->kind == ACTION_EXECUTE)
-        action_execute(sb_cstr(&cmd));
-      else if (!reload(app, sb_cstr(&cmd)))
-        ok = false;
       sb_free(&cmd);
-      return ok;
+      return flow;
     }
   }
   if (!ok)
     LOG_WARN("query allocation failed");
-  return true;
+  return FLOW_NEXT;
+}
+
+/* Runs the bind's actions, from the from-th on. */
+static void run_actions(struct app* app, uint32_t bind, size_t from) {
+  const ActionList* actions = &app->config.binds.ptr[bind].actions;
+  for (size_t i = from; i < actions->len; i++) {
+    enum flow flow = run_action(app, &actions->ptr[i]);
+    if (flow == FLOW_STOP)
+      return;
+    if (flow == FLOW_WAIT) {
+      app->waiting = true;
+      app->resume_bind = bind;
+      app->resume_action = i + 1;
+      return;
+    }
+  }
 }
 
 static void on_key(void* data, const struct kb_result* key) {
   struct app* app = data;
   /* Once the loop is stopping, keys already queued (or repeating) must not
-   * touch the state: a picked entry points into it. */
-  if (!app->running)
+   * touch the state: a picked entry points into it. While an execute()
+   * runs, the keys are meant for after it. */
+  if (!app->running || app->executing)
     return;
 
   if (!key->bound) {
     if (!state_query_insert(&app->state, str_from_cstr(key->text)))
       LOG_WARN("query allocation failed");
   } else {
-    const ActionList* actions = &app->config.binds.ptr[key->bind].actions;
-    ARR_FOREACH(const struct action, a, actions) {
-      if (!run_action(app, a))
-        break;
-    }
+    run_actions(app, key->bind, 0);
   }
   if (app->running)
     render_request(&app->render);
@@ -471,6 +403,7 @@ static void usage(FILE* f, const char* argv0) {
       "\n"
       "Picking one execs it (-x, \"exec\"), runs it detached (-X,\n"
       "\"detach\"), or else prints its command line to stdout.\n"
+      "Exits 0 once something was picked, 130 if nothing was, 1 on error.\n"
       "\n"
       "  -c, --config PATH  config file (default: "
       "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
@@ -550,7 +483,7 @@ int main(int argc, char** argv) {
   size_t n_flags = 0;
   if (flags == NULL) {
     LOG_FATAL("allocation failed");
-    return 1;
+    return EXIT_ERROR;
   }
 
   struct option opts[4 + N_MAIN_KEYS + 1] = {
@@ -571,11 +504,11 @@ int main(int argc, char** argv) {
       case 'h':
         usage(stdout, argv[0]);
         free(flags);
-        return 0;
+        return EXIT_SUCCESS;
       case '?':
         usage(stderr, argv[0]);
         free(flags);
-        return 1;
+        return EXIT_ERROR;
       default:
         flags[n_flags++] = (struct flag){opt, optarg};
         break;
@@ -584,7 +517,7 @@ int main(int argc, char** argv) {
   if (optind < argc) {
     usage(stderr, argv[0]);
     free(flags);
-    return 1;
+    return EXIT_ERROR;
   }
 
   struct app app = {.running = true};
@@ -597,6 +530,7 @@ int main(int argc, char** argv) {
     goto cleanup;
   }
   fdm_ok = true;
+  procs_init(&app.procs, &app.fdm);
 
   bool config_ok = load_config(&app.config, config_path, flags, n_flags);
   free(flags); /* the flags were copied into the config */
@@ -679,12 +613,16 @@ cleanup:
   if (wayl_ok)
     wayl_destroy(&app.wayl);
   kb_manager_destroy(app.kb); /* after wayl: it looks keys up in it */
-  if (fdm_ok)
+  if (fdm_ok) {
+    procs_destroy(&app.procs); /* after input: it terminates through procs */
     fdm_destroy(&app.fdm);
+  }
   if (err == 0 && app.pending != NULL && !run_entry(app.pending, token))
     err = 1; /* the entry lives in state, which is still alive */
   free(token);
   state_destroy(&app.state);
   config_destroy(&app.config);
-  return err == 0 ? 0 : 1;
+  if (err != 0)
+    return EXIT_ERROR;
+  return app.pending != NULL ? EXIT_PICKED : EXIT_CANCELLED;
 }

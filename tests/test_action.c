@@ -1,10 +1,11 @@
 #include "action.h"
+#include "shell.h"
 
 #include "test.h"
 
 static void check_quote(const char* s, const char* want) {
   StrBuf out = STRBUF_INIT;
-  CHECK(action_quote(&out, str_from_cstr(s)));
+  CHECK(shell_quote(&out, str_from_cstr(s)));
   CHECK_STR(sb_str(&out), want);
   sb_free(&out);
 }
@@ -20,10 +21,8 @@ static void test_quote(void) {
   check_quote("~", "'~'");
 
   /* zsh expands a leading = when the line is eval'd. */
-  StrBuf out = STRBUF_INIT;
-  action_quote(&out, STR("=ls"));
-  XFAIL(str_eq(sb_str(&out), STR("'=ls'")));
-  sb_free(&out);
+  check_quote("=ls", "'=ls'");
+  check_quote("a=b", "a=b");
 }
 
 /* Expands tmpl against st, checking the result. */

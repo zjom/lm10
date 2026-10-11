@@ -3,6 +3,7 @@
 
 #include "entry_parse.h"
 #include "fdm.h"
+#include "spawn.h"
 #include "state.h"
 
 #include <sys/types.h>
@@ -11,8 +12,9 @@
  * the state as they arrive; see entry_parser for the formats. */
 struct input {
   struct fdm* fdm;
-  int fd;     // -1 once EOF or an error has been reached
-  pid_t pid;  // the command writing to fd, which is ours; or -1
+  struct procs* procs;  // reaps the command; NULL for a plain fd
+  int fd;               // -1 once EOF or an error has been reached
+  pid_t pid;            // the command writing to fd, which is ours; or -1
   struct entry_parser parser;
   void (*on_change)(void* data);  // called after entries were pushed
   void* data;
@@ -26,16 +28,18 @@ int input_init(struct input* in,
                struct state* state,
                void (*on_change)(void* data),
                void* data);
-/* Like input_init, reading the output of sh -c cmd. Its stdin is
- * /dev/null. */
+/* Like input_init, reading the output of sh -c cmd, whose stdin is
+ * /dev/null. procs reaps it. */
 int input_init_command(struct input* in,
                        struct fdm* fdm,
+                       struct procs* procs,
                        const char* cmd,
                        struct state* state,
                        void (*on_change)(void* data),
                        void* data);
 
-/* Stops reading. A command that is still running is killed. */
+/* Stops reading. A command that is still running is terminated, without
+ * waiting for it. */
 void input_destroy(struct input* in);
 
 #endif  // !LM_INPUT_H

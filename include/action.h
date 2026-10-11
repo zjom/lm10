@@ -46,10 +46,6 @@ struct action {
 
 typedef LIST(struct action) ActionList;
 
-/* Appends s to out, single-quoted unless it is made only of characters no
- * shell treats specially. Returns false on allocation failure. */
-bool action_quote(StrBuf* out, Str s);
-
 /* Expands the placeholders in tmpl into out, each shell-quoted:
  *
  *   {}      the selected entry's command line
@@ -61,9 +57,5 @@ bool action_quote(StrBuf* out, Str s);
  * With no selection, or out of range, they expand to ''. Other braces are
  * copied as is. Returns false on allocation failure. */
 bool action_expand(StrBuf* out, Str tmpl, struct state* state);
-
-/* Runs cmd with sh -c and waits for it. Its stdin is /dev/null and its stdout
- * goes to stderr, so it can't disturb lm10's output. */
-void action_execute(const char* cmd);
 
 #endif  // !LM_ACTION_H
