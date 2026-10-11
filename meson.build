@@ -73,33 +73,43 @@ third_party_lib = static_library(
   override_options: ['warning_level=0'],
 )
 
-srcs = files(
+# Everything but main, so the tests can link against it.
+core_srcs = files(
+  'src/action.c',
+  'src/config.c',
   'src/draw.c',
+  'src/entry_parse.c',
   'src/fdm.c',
-  'src/input.c',
   'src/frame.c',
   'src/icon.c',
-  'src/main.c',
+  'src/input.c',
+  'src/kb.c',
   'src/render.c',
+  'src/shellwords.c',
   'src/state.c',
   'src/wayl.c',
-  'src/kb.c',
-  'src/config.c',
-  'src/action.c',
+)
+
+core_inc = [include_directories('include'), third_party_inc]
+core_deps = [wayland_client, pangocairo, librsvg, xkbcommon, m]
+
+core_lib = static_library(
+  'lm10-core',
+  core_srcs,
+  protocol_headers,
+  include_directories: core_inc,
+  link_with: third_party_lib,
+  dependencies: core_deps,
 )
 
 executable(
   'lm10',
-  srcs,
+  'src/main.c',
   protocol_headers,
-  include_directories: [include_directories('include'), third_party_inc],
-  link_with: third_party_lib,
-  dependencies: [
-    wayland_client,
-    pangocairo,
-    librsvg,
-    xkbcommon,
-    m,
-  ],
+  include_directories: core_inc,
+  link_with: core_lib,
+  dependencies: core_deps,
   install: true,
 )
+
+subdir('tests')
