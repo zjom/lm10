@@ -100,8 +100,7 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
     return false;
   }
 
-  if (!state_push(ep->state, name, &ep->words, icon, run))
-    goto oom;
+  state_push(ep->state, name, &ep->words, icon, run);
   return true;
 
 oom:
@@ -310,10 +309,7 @@ static bool json_entry(struct entry_parser* ep,
              json_line(v, line));
     return false;
   }
-  if (!state_push(ep->state, name, &ep->words, icon, run)) {
-    LOG_WARN("entry allocation failed");
-    return false;
-  }
+  state_push(ep->state, name, &ep->words, icon, run);
   return true;
 }
 

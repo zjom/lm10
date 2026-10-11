@@ -188,25 +188,25 @@ static bool run_action(struct app* app, const struct action* a) {
       app->running = false;
       return true;
     case ACTION_DELETE_PREV:
-      ok = state_query_delete(st, STATE_MOTION_CHAR_LEFT);
+      state_query_delete(st, STATE_MOTION_CHAR_LEFT);
       break;
     case ACTION_DELETE_PREV_WORD:
-      ok = state_query_delete(st, STATE_MOTION_WORD_LEFT);
+      state_query_delete(st, STATE_MOTION_WORD_LEFT);
       break;
     case ACTION_DELETE_NEXT:
-      ok = state_query_delete(st, STATE_MOTION_CHAR_RIGHT);
+      state_query_delete(st, STATE_MOTION_CHAR_RIGHT);
       break;
     case ACTION_DELETE_NEXT_WORD:
-      ok = state_query_delete(st, STATE_MOTION_WORD_RIGHT);
+      state_query_delete(st, STATE_MOTION_WORD_RIGHT);
       break;
     case ACTION_DELETE_LINE_START:
-      ok = state_query_delete(st, STATE_MOTION_START);
+      state_query_delete(st, STATE_MOTION_START);
       break;
     case ACTION_DELETE_LINE_END:
-      ok = state_query_delete(st, STATE_MOTION_END);
+      state_query_delete(st, STATE_MOTION_END);
       break;
     case ACTION_DELETE_LINE:
-      ok = state_query_clear(st);
+      state_query_clear(st);
       break;
     case ACTION_CURSOR_LEFT:
       state_cursor_move(st, STATE_MOTION_CHAR_LEFT);
@@ -240,20 +240,20 @@ static bool run_action(struct app* app, const struct action* a) {
       state_select_prev(st);
       break;
     case ACTION_CHANGE_PROMPT:
-      ok = state_set_prompt(st, a->arg);
+      state_set_prompt(st, a->arg);
       break;
     case ACTION_CHANGE_QUERY:
-      ok = state_query_set(st, a->arg);
+      state_query_set(st, a->arg);
       break;
     case ACTION_CHANGE_HEADER: {
       StrBuf header = STRBUF_INIT;
-      ok = config_unescape(&header, a->arg) &&
-           state_set_header(st, sb_str(&header));
+      ok = config_unescape(&header, a->arg);
+      state_set_header(st, sb_str(&header));
       sb_free(&header);
       break;
     }
     case ACTION_CHANGE_BORDER_LABEL:
-      ok = state_set_border_label(st, a->arg);
+      state_set_border_label(st, a->arg);
       break;
     case ACTION_RELOAD:
     case ACTION_EXECUTE: {
@@ -292,8 +292,7 @@ static void on_key(void* data, const struct kb_result* key) {
     return;
 
   if (!key->bound) {
-    if (!state_query_insert(&app->state, str_from_cstr(key->text)))
-      LOG_WARN("query allocation failed");
+    state_query_insert(&app->state, str_from_cstr(key->text));
   } else {
     run_actions(app, key->bind);
   }
@@ -519,13 +518,9 @@ int main(int argc, char** argv) {
     goto cleanup;
   }
   const struct config_ui* ui = &app.config.ui;
-  if (!state_set_prompt(&app.state, sb_str(&ui->prompt)) ||
-      !state_set_header(&app.state, sb_str(&ui->header)) ||
-      !state_set_border_label(&app.state, sb_str(&ui->border_label))) {
-    LOG_FATAL("allocation failed");
-    err = 1;
-    goto cleanup;
-  }
+  state_set_prompt(&app.state, sb_str(&ui->prompt));
+  state_set_header(&app.state, sb_str(&ui->header));
+  state_set_border_label(&app.state, sb_str(&ui->border_label));
   state_set_fuzzy(&app.state, ui->fuzzy);
 
   app.kb = kb_manager_new();

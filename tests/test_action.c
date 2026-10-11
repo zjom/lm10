@@ -37,7 +37,7 @@ static void push(struct state* st, const char* name, const char* const* argv) {
   StrList words = LIST_INIT;
   for (size_t i = 0; argv[i] != NULL; i++)
     LIST_PUSH(&words, str_from_cstr(argv[i]));
-  CHECK(state_push(st, str_from_cstr(name), &words, STR(""), STATE_RUN_PRINT));
+  state_push(st, str_from_cstr(name), &words, STR(""), STATE_RUN_PRINT);
   LIST_FREE(&words);
 }
 
@@ -50,7 +50,7 @@ static void test_expand(void) {
 
   push(&st, "My Session",
        (const char* const[]){"tmux", "attach", "-t", "a b", NULL});
-  CHECK(state_query_set(&st, STR("my")));
+  state_query_set(&st, STR("my"));
   check_expand(&st, "{}", "tmux attach -t 'a b'");
   check_expand(&st, "{n}", "'My Session'");
   check_expand(&st, "{q}", "my");

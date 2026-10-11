@@ -7,7 +7,7 @@
 static void push(struct state* st, const char* name) {
   StrList argv = LIST_INIT;
   LIST_PUSH(&argv, STR("cmd"));
-  CHECK(state_push(st, str_from_cstr(name), &argv, STR(""), STATE_RUN_PRINT));
+  state_push(st, str_from_cstr(name), &argv, STR(""), STATE_RUN_PRINT);
   LIST_FREE(&argv);
 }
 
@@ -26,7 +26,7 @@ static void check_matches(const struct state* st, const char* want) {
 /* The i-th match's highlighted spans, as "start+len" joined by ' '. */
 static void check_spans(const struct state* st, size_t i, const char* want) {
   SpanList spans = LIST_INIT;
-  CHECK(state_match_spans(st, i, &spans));
+  state_match_spans(st, i, &spans);
   StrBuf got = STRBUF_INIT;
   ARR_FOREACH(const struct state_span, sp, &spans) {
     sb_appendf(&got, "%s%zu+%zu", got.len > 0 ? " " : "", sp->start, sp->len);
@@ -45,22 +45,22 @@ static void test_unicode_matching(void) {
   push(&st, "ascii");
   push(&st, "Straße");
 
-  CHECK(state_query_set(&st, STR("üb")));
+  state_query_set(&st, STR("üb"));
   check_matches(&st, "Über|ÜBERALL|über");
   check_spans(&st, 0, "0+3");  // Ü is two bytes
 
-  CHECK(state_query_set(&st, STR("SSE")));
+  state_query_set(&st, STR("SSE"));
   check_matches(&st, "");  // simple case mapping only: ß isn't ss
-  CHECK(state_query_set(&st, STR("STRA")));
+  state_query_set(&st, STR("STRA"));
   check_matches(&st, "Straße");
-  CHECK(state_query_set(&st, STR("ASC")));
+  state_query_set(&st, STR("ASC"));
   check_matches(&st, "ascii");
   check_spans(&st, 0, "0+3");
-  CHECK(state_query_set(&st, STR("ßE")));
+  state_query_set(&st, STR("ßE"));
   check_spans(&st, 0, "4+3");
 
   /* An empty query matches everything, with no span. */
-  CHECK(state_query_clear(&st));
+  state_query_clear(&st);
   CHECK(st.matches.len == 5);
   check_spans(&st, 0, "");
   state_destroy(&st);
@@ -75,7 +75,7 @@ static void test_invalid_utf8(void) {
   CHECK(strstr(e->name.ptr, "\xff") == NULL);
   CHECK(strstr(e->name.ptr, "\xef\xbf\xbd") != NULL);  // U+FFFD
 
-  CHECK(state_query_insert(&st, STR("a\xfe")));
+  state_query_insert(&st, STR("a\xfe"));
   CHECK(strstr(sb_cstr(&st.query), "\xfe") == NULL);
   state_destroy(&st);
 }
@@ -88,24 +88,24 @@ static void test_narrowing(void) {
     push(&st, names[i]);
 
   /* Typing at the end narrows; it must agree with filtering from scratch. */
-  CHECK(state_query_insert(&st, STR("a")));
+  state_query_insert(&st, STR("a"));
   check_matches(&st, "alpha|alpine|beta|Alps|gamma|lap");
-  CHECK(state_query_insert(&st, STR("l")));
+  state_query_insert(&st, STR("l"));
   check_matches(&st, "alpha|alpine|Alps");
-  CHECK(state_query_insert(&st, STR("p")));
+  state_query_insert(&st, STR("p"));
   check_matches(&st, "alpha|alpine|Alps");
-  CHECK(state_query_insert(&st, STR("s")));
+  state_query_insert(&st, STR("s"));
   check_matches(&st, "Alps");
 
   /* Deleting widens again, and inserting mid-query refilters fully. */
-  CHECK(state_query_delete(&st, STATE_MOTION_CHAR_LEFT));
+  state_query_delete(&st, STATE_MOTION_CHAR_LEFT);
   check_matches(&st, "alpha|alpine|Alps");
   state_cursor_move(&st, STATE_MOTION_START);
-  CHECK(state_query_insert(&st, STR("l")));  // "lalp"
+  state_query_insert(&st, STR("l"));  // "lalp"
   check_matches(&st, "");
-  CHECK(state_query_delete(&st, STATE_MOTION_CHAR_LEFT));
+  state_query_delete(&st, STATE_MOTION_CHAR_LEFT);
   state_cursor_move(&st, STATE_MOTION_END);
-  CHECK(state_query_set(&st, STR("la")));
+  state_query_set(&st, STR("la"));
   check_matches(&st, "lap");
   state_destroy(&st);
 }
@@ -137,7 +137,7 @@ static void test_gen(void) {
   g = st.gen;
   state_cursor_move(&st, STATE_MOTION_END);
   CHECK(st.gen == g);
-  CHECK(state_query_delete(&st, STATE_MOTION_CHAR_RIGHT));
+  state_query_delete(&st, STATE_MOTION_CHAR_RIGHT);
   CHECK(st.gen == g);
   CHECK_STR(sb_str(&st.header), "a\nb");
   state_destroy(&st);
@@ -159,7 +159,7 @@ static void test_fuzzy(void) {
   state_set_fuzzy(&st, true);
   check_matches(&st, "fabric|foo bar|firefox browser|FooBar|xfb|nothing");
 
-  CHECK(state_query_set(&st, STR("fb")));
+  state_query_set(&st, STR("fb"));
   /* Word starts beat gaps, which beat matching mid-word; ties keep entry
    * order. firefox browser keeps its leading f rather than the shorter
    * "fox b". */
@@ -171,7 +171,7 @@ static void test_fuzzy(void) {
     CHECK(st.matches.ptr[i - 1].score >= st.matches.ptr[i].score);
 
   /* Narrowing keeps the ranking right. */
-  CHECK(state_query_insert(&st, STR("r")));
+  state_query_insert(&st, STR("r"));
   check_matches(&st, "firefox browser|fabric|foo bar|FooBar");
 
   /* Entries arriving later go in by score once sorted; the selection stays
@@ -186,7 +186,7 @@ static void test_fuzzy(void) {
   /* Back to substrings, in entry order. */
   state_set_fuzzy(&st, false);
   check_matches(&st, "");
-  CHECK(state_query_set(&st, STR("b")));
+  state_query_set(&st, STR("b"));
   check_matches(&st, "fabric|foo bar|firefox browser|FooBar|xfb|f b r|zzfzbzr");
   state_destroy(&st);
 }

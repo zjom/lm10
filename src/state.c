@@ -299,21 +299,21 @@ void state_set_fuzzy(struct state* state, bool fuzzy) {
   refilter(state, false);
 }
 
-/* Sets b to s, with invalid UTF-8 replaced. Returns false on allocation
- * failure. */
-static bool set_utf8(StrBuf* b, Str s) {
+/* Sets b to s, with invalid UTF-8 replaced. */
+static void set_utf8(StrBuf* b, Str s) {
   sb_clear(b);
-  if (g_utf8_validate_len(s.ptr, s.len, NULL))
-    return sb_append(b, s);
+  if (g_utf8_validate_len(s.ptr, s.len, NULL)) {
+    sb_append(b, s);
+    return;
+  }
   gchar* valid = g_utf8_make_valid(s.ptr, (gssize)s.len);
-  bool ok = sb_append_cstr(b, valid);
+  sb_append_cstr(b, valid);
   g_free(valid);
-  return ok;
 }
 
 /* ---- entries ---- */
 
-bool state_push(struct state* state,
+void state_push(struct state* state,
                 Str name,
                 const StrList* argv,
                 Str icon,
@@ -322,18 +322,11 @@ bool state_push(struct state* state,
       .argv = LIST_INIT_ARENA(&state->arena),
       .run = run,
   };
-  if (icon.ptr != NULL) {
+  if (icon.ptr != NULL)
     e.icon = str_arena_dup(&state->arena, icon);
-    if (e.icon.ptr == NULL)
-      return false;
-  }
-  if (!LIST_RESERVE(&e.argv, argv->len))
-    return false;
-  ARR_FOREACH(const Str, w, argv) {
-    Str owned = str_arena_dup(&state->arena, *w);
-    if (owned.ptr == NULL || !LIST_PUSH(&e.argv, owned))
-      return false;
-  }
+  LIST_RESERVE(&e.argv, argv->len);
+  ARR_FOREACH(const Str, w, argv)
+    LIST_PUSH(&e.argv, str_arena_dup(&state->arena, *w));
 
   /* Apps are usually installed with an icon named after their binary. The
    * basename ends where argv[0] does, so it stays NUL-terminated. */
@@ -347,28 +340,21 @@ bool state_push(struct state* state,
   /* The name is drawn and matched as text, so it must be valid UTF-8. */
   StrBuf b = STRBUF_INIT_ARENA(&state->arena);
   if (name.len != 0) {
-    if (!set_utf8(&b, name))
-      return false;
+    set_utf8(&b, name);
   } else {
     StrBuf joined = STRBUF_INIT;
-    bool ok = strlist_join(&joined, &e.argv, STR(" ")) &&
-              set_utf8(&b, sb_str(&joined));
+    strlist_join(&joined, &e.argv, STR(" "));
+    set_utf8(&b, sb_str(&joined));
     sb_free(&joined);
-    if (!ok)
-      return false;
   }
   /* An arena StrBuf is NUL-terminated once it has storage; reserve some
    * even for an empty name. */
-  if (!sb_reserve(&b, 0))
-    return false;
+  sb_reserve(&b, 0);
   e.name = sb_str(&b);
 
-  if (!LIST_PUSH(&state->entries, e))
-    return false;
+  LIST_PUSH(&state->entries, e);
   state->gen++;
-
   add_match(state, state->entries.len - 1);
-  return true;
 }
 
 void state_clear_entries(struct state* state) {
@@ -425,26 +411,20 @@ static size_t motion_target(const struct state* state,
   return i;
 }
 
-bool state_query_insert(struct state* state, Str text) {
+void state_query_insert(struct state* state, Str text) {
   StrBuf valid = STRBUF_INIT;
-  if (!set_utf8(&valid, text)) {
-    sb_free(&valid);
-    return false;
-  }
+  set_utf8(&valid, text);
   bool at_end = state->cursor == state->query.len;
-  bool ok = sb_insert(&state->query, state->cursor, sb_str(&valid));
-  if (ok)
-    state->cursor += valid.len;
+  sb_insert(&state->query, state->cursor, sb_str(&valid));
+  state->cursor += valid.len;
   sb_free(&valid);
-  if (ok)
-    refilter(state, at_end);
-  return ok;
+  refilter(state, at_end);
 }
 
-bool state_query_delete(struct state* state, enum state_motion motion) {
+void state_query_delete(struct state* state, enum state_motion motion) {
   size_t a = state->cursor, b = motion_target(state, motion);
   if (a == b)
-    return true;
+    return;
   if (a > b) {
     size_t t = a;
     a = b;
@@ -456,23 +436,20 @@ bool state_query_delete(struct state* state, enum state_motion motion) {
   sb_truncate(&state->query, len - (b - a));
   state->cursor = a;
   refilter(state, false);
-  return true;
 }
 
-bool state_query_clear(struct state* state) {
+void state_query_clear(struct state* state) {
   if (state->query.len == 0)
-    return true;
+    return;
   sb_clear(&state->query);
   state->cursor = 0;
   refilter(state, false);
-  return true;
 }
 
-bool state_query_set(struct state* state, Str text) {
-  bool ok = set_utf8(&state->query, text);
+void state_query_set(struct state* state, Str text) {
+  set_utf8(&state->query, text);
   state->cursor = state->query.len;
   refilter(state, false);
-  return ok;
 }
 
 void state_cursor_move(struct state* state, enum state_motion motion) {
@@ -485,21 +462,21 @@ void state_cursor_move(struct state* state, enum state_motion motion) {
 
 /* ---- texts ---- */
 
-static bool set_text(struct state* state, StrBuf* dst, Str text) {
+static void set_text(struct state* state, StrBuf* dst, Str text) {
   state->gen++;
-  return set_utf8(dst, text);
+  set_utf8(dst, text);
 }
 
-bool state_set_prompt(struct state* state, Str text) {
-  return set_text(state, &state->prompt, text);
+void state_set_prompt(struct state* state, Str text) {
+  set_text(state, &state->prompt, text);
 }
 
-bool state_set_header(struct state* state, Str text) {
-  return set_text(state, &state->header, text);
+void state_set_header(struct state* state, Str text) {
+  set_text(state, &state->header, text);
 }
 
-bool state_set_border_label(struct state* state, Str text) {
-  return set_text(state, &state->border_label, text);
+void state_set_border_label(struct state* state, Str text) {
+  set_text(state, &state->border_label, text);
 }
 
 /* ---- selection ---- */
@@ -526,17 +503,16 @@ const struct state_entry* state_match(const struct state* state, size_t i) {
   return &state->entries.ptr[state->matches.ptr[i].entry];
 }
 
-bool state_match_spans(const struct state* state, size_t i, SpanList* spans) {
+void state_match_spans(const struct state* state, size_t i, SpanList* spans) {
   LIST_CLEAR(spans);
   if (state->needle.len == 0)
-    return true;
+    return;
   Str name = state_match(state, i)->name;
   int32_t score;
   if (state->fuzzy)
     find_fuzzy(name, &state->needle, &score, spans);
   else
     find_substring(name, &state->needle, spans);
-  return !spans->failed;
 }
 
 const struct state_entry* state_get_selection(const struct state* state) {

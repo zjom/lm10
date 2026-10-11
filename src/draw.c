@@ -437,7 +437,8 @@ static void draw_rows(const struct state* state,
     pango_layout_set_width(
         layout, (int)((cw - 2 * ui->row_padding - icon_w) * PANGO_SCALE));
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-    if (state_match_spans(state, i, &dc->spans) && dc->spans.len > 0) {
+    state_match_spans(state, i, &dc->spans);
+    if (dc->spans.len > 0) {
       PangoAttrList* attrs =
           highlight(&dc->spans, sel ? c->selection_match : c->match);
       pango_layout_set_attributes(layout, attrs);

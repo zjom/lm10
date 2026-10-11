@@ -69,8 +69,8 @@ void state_destroy(struct state* state);
 /* Copies name, argv and icon into state->arena. argv must be non-empty. If
  * name is empty, argv joined with spaces is used; invalid UTF-8 in it is
  * replaced. If icon is null (ptr NULL), the basename of argv[0] is guessed;
- * an empty non-null icon means none. Returns false on allocation failure. */
-bool state_push(struct state* state,
+ * an empty non-null icon means none. */
+void state_push(struct state* state,
                 Str name,
                 const StrList* argv,
                 Str icon,
@@ -90,20 +90,19 @@ enum state_motion {
 };
 
 /* Query edits refilter and reset the selection to the first match. Invalid
- * UTF-8 in text is replaced. Each returns false on allocation failure. */
-bool state_query_insert(struct state* state, Str text);  // at the cursor
+ * UTF-8 in text is replaced. */
+void state_query_insert(struct state* state, Str text);  // at the cursor
 /* Deletes between the cursor and where the motion would move it. */
-bool state_query_delete(struct state* state, enum state_motion motion);
-bool state_query_clear(struct state* state);
+void state_query_delete(struct state* state, enum state_motion motion);
+void state_query_clear(struct state* state);
 /* Replaces the query, with the cursor at its end. */
-bool state_query_set(struct state* state, Str text);
+void state_query_set(struct state* state, Str text);
 void state_cursor_move(struct state* state, enum state_motion motion);
 
-/* Replace the texts around the query (the header's lines are split by \n).
- * Each returns false on allocation failure. */
-bool state_set_prompt(struct state* state, Str text);
-bool state_set_header(struct state* state, Str text);
-bool state_set_border_label(struct state* state, Str text);
+/* Replace the texts around the query (the header's lines are split by \n). */
+void state_set_prompt(struct state* state, Str text);
+void state_set_header(struct state* state, Str text);
+void state_set_border_label(struct state* state, Str text);
 
 /* Matches the query as a subsequence, ranking the best matches first,
  * rather than as a substring in entry order. */
@@ -122,8 +121,8 @@ void state_select_prev(struct state* state);
 const struct state_entry* state_match(const struct state* state, size_t i);
 /* Sets spans to the byte ranges of the i-th match's name that matched the
  * query: one for a substring, up to one per character when fuzzy, none
- * for an empty query. Returns false on allocation failure. */
-bool state_match_spans(const struct state* state, size_t i, SpanList* spans);
+ * for an empty query. */
+void state_match_spans(const struct state* state, size_t i, SpanList* spans);
 /* The selected match, or NULL if there are none. */
 const struct state_entry* state_get_selection(const struct state* state);
 
