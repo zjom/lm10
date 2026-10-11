@@ -2,6 +2,8 @@
 
 a picker menu overlay for wayland (wlroots) based compositors.
 
+![screenshot of lm10](./lm10-screenshot.png)
+
 ## usage
 
 ```sh
