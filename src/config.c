@@ -421,6 +421,45 @@ static bool set_key(ConfigBindList* binds,
 
 enum section { SECTION_NONE, SECTION_MAIN, SECTION_COLORS, SECTION_KEYS };
 
+static bool parse_section(Str name, enum section* out) {
+  if (str_eq_cstr(name, "main"))
+    *out = SECTION_MAIN;
+  else if (str_eq_cstr(name, "colors"))
+    *out = SECTION_COLORS;
+  else if (str_eq_cstr(name, "keys"))
+    *out = SECTION_KEYS;
+  else
+    return false;
+  return true;
+}
+
+/* Applies key = val (both trimmed, val unquoted) to section. Returns false on
+ * allocation failure. */
+static bool set_value(struct config* cfg,
+                      const struct loc* loc,
+                      enum section section,
+                      Str key,
+                      Str val) {
+  key = str_trim(key);
+  val = str_trim(val);
+  if (val.len >= 2 && val.ptr[0] == '"' && val.ptr[val.len - 1] == '"')
+    val = str_slice(val, 1, val.len - 1);
+
+  switch (section) {
+    case SECTION_NONE:
+      PARSE_WARN(loc, "%s", "key outside of a section");
+      break;
+    case SECTION_MAIN:
+      return set_main(&cfg->ui, loc, key, val);
+    case SECTION_COLORS:
+      set_color(&cfg->ui.colors, loc, key, val);
+      break;
+    case SECTION_KEYS:
+      return set_key(&cfg->binds, loc, key, val);
+  }
+  return true;
+}
+
 /* Returns false on allocation failure. */
 static bool parse(struct config* cfg, const char* path, Str text) {
   struct loc loc = {.path = path};
@@ -440,13 +479,7 @@ static bool parse(struct config* cfg, const char* path, Str text) {
         continue;
       }
       name = str_trim(str_slice(line, 1, line.len));
-      if (str_eq_cstr(name, "main")) {
-        section = SECTION_MAIN;
-      } else if (str_eq_cstr(name, "colors")) {
-        section = SECTION_COLORS;
-      } else if (str_eq_cstr(name, "keys")) {
-        section = SECTION_KEYS;
-      } else {
+      if (!parse_section(name, &section)) {
         PARSE_WARN(&loc, "unknown section [" STR_FMT "]", STR_ARG(name));
         section = SECTION_NONE;
       }
@@ -458,29 +491,32 @@ static bool parse(struct config* cfg, const char* path, Str text) {
       PARSE_WARN(&loc, "%s", "expected key = value");
       continue;
     }
-    key = str_trim(key);
-    val = str_trim(val);
-    if (val.len >= 2 && val.ptr[0] == '"' && val.ptr[val.len - 1] == '"')
-      val = str_slice(val, 1, val.len - 1);
-
-    switch (section) {
-      case SECTION_NONE:
-        PARSE_WARN(&loc, "%s", "key outside of a section");
-        break;
-      case SECTION_MAIN:
-        if (!set_main(&cfg->ui, &loc, key, val))
-          return false;
-        break;
-      case SECTION_COLORS:
-        set_color(&cfg->ui.colors, &loc, key, val);
-        break;
-      case SECTION_KEYS:
-        if (!set_key(&cfg->binds, &loc, key, val))
-          return false;
-        break;
-    }
+    if (!set_value(cfg, &loc, section, key, val))
+      return false;
   }
   return true;
+}
+
+bool config_apply_override(struct config* cfg, size_t n, const char* arg) {
+  struct loc loc = {.path = "-o", .line = n};
+  Str lhs, val;
+  if (!str_cut(str_from_cstr(arg), STR("="), &lhs, &val)) {
+    PARSE_WARN(&loc, "%s", "expected [section.]key=value");
+    return true;
+  }
+
+  enum section section = SECTION_MAIN;
+  Str name, key;
+  if (str_cut(lhs, STR("."), &name, &key)) {
+    name = str_trim(name);
+    if (!parse_section(name, &section)) {
+      PARSE_WARN(&loc, "unknown section [" STR_FMT "]", STR_ARG(name));
+      return true;
+    }
+  } else {
+    key = lhs;
+  }
+  return set_value(cfg, &loc, section, key, val);
 }
 
 int config_load_file(struct config* cfg, const char* path) {

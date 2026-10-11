@@ -8,6 +8,7 @@
  * meson setup bld/debug && ninja -C bld/debug
  *
  * The look is set in ~/.config/lm10/lm10.ini (or -c PATH); see config.h.
+ * -o [SECTION.]KEY=VALUE overrides a single key, e.g. -o colors.text=#ffffff.
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...):
  *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-X foot' |
@@ -384,7 +385,7 @@ static const struct wayl_listener wayl_listener = {
 
 static void usage(FILE* f, const char* argv0) {
   fprintf(f,
-          "usage: %s [-c CONFIG]\n"
+          "usage: %s [-c CONFIG] [-o [SECTION.]KEY=VALUE]...\n"
           "Reads entries from stdin, one per line:\n"
           "  [-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]\n"
           "Picking one execs it (-x), runs it detached (-X), or else prints\n"
@@ -392,59 +393,87 @@ static void usage(FILE* f, const char* argv0) {
           "\n"
           "  -c, --config PATH  config file (default: "
           "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
+          "  -o, --override [SECTION.]KEY=VALUE\n"
+          "                     set a config key after the file is read;\n"
+          "                     SECTION is main (default), colors or keys,\n"
+          "                     e.g. -o width=40%% -o keys.cancel=Escape\n"
           "  -h, --help         show this help\n",
           argv0);
 }
 
-/* Loads the built-in config, then the file. Returns false on a fatal error. */
-static bool load_config(struct config* cfg, const char* path) {
+/* Loads the built-in config, then the file, then the -o overrides in order.
+ * Returns false on a fatal error. */
+static bool load_config(struct config* cfg,
+                        const char* path,
+                        char* const* overrides,
+                        size_t n_overrides) {
   if (!config_load_defaults(cfg)) {
     LOG_FATAL("failed to load default config");
     return false;
   }
 
   StrBuf def = STRBUF_INIT;
-  if (path == NULL) {
-    if (!config_default_path(&def)) {
-      sb_free(&def);
-      return true; /* nowhere to look; the defaults will do */
-    }
+  bool explicit_path = path != NULL;
+  int ret = 1; /* nowhere to look; the defaults will do */
+  if (path == NULL && config_default_path(&def))
     path = sb_cstr(&def);
-  }
-  bool explicit_path = def.len == 0;
-  int ret = config_load_file(cfg, path);
+  if (path != NULL)
+    ret = config_load_file(cfg, path);
   if (ret == 1 && explicit_path)
     LOG_ERROR("%s: no such file", path);
   sb_free(&def);
-  return ret == 0 || (ret == 1 && !explicit_path);
+  if (!(ret == 0 || (ret == 1 && !explicit_path)))
+    return false;
+
+  for (size_t i = 0; i < n_overrides; i++) {
+    if (!config_apply_override(cfg, i + 1, overrides[i])) {
+      LOG_FATAL("-o: allocation failed");
+      return false;
+    }
+  }
+  return true;
 }
 
 int main(int argc, char** argv) {
   int err = 0;
   bool fdm_ok = false, wayl_ok = false, render_ok = false, input_ok = false;
   const char* config_path = NULL;
+  /* -o arguments, in order; there are fewer than argc of them */
+  char** overrides = calloc((size_t)argc, sizeof(*overrides));
+  size_t n_overrides = 0;
+  if (overrides == NULL) {
+    LOG_FATAL("allocation failed");
+    return 1;
+  }
 
   static const struct option opts[] = {
       {"config", required_argument, NULL, 'c'},
+      {"override", required_argument, NULL, 'o'},
       {"help", no_argument, NULL, 'h'},
       {0},
   };
   int opt;
-  while ((opt = getopt_long(argc, argv, "c:h", opts, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "c:o:h", opts, NULL)) != -1) {
     switch (opt) {
       case 'c':
         config_path = optarg;
         break;
+      case 'o':
+        overrides[n_overrides++] = optarg;
+        break;
       case 'h':
         usage(stdout, argv[0]);
+        free(overrides);
         return 0;
       default:
         usage(stderr, argv[0]);
+        free(overrides);
         return 1;
     }
   }
   if (optind < argc) {
     usage(stderr, argv[0]);
+    free(overrides);
     return 1;
   }
 
@@ -459,7 +488,10 @@ int main(int argc, char** argv) {
   }
   fdm_ok = true;
 
-  if (!load_config(&app.config, config_path)) {
+  bool config_ok =
+      load_config(&app.config, config_path, overrides, n_overrides);
+  free(overrides); /* the overrides were copied into the config */
+  if (!config_ok) {
     err = 1;
     goto cleanup;
   }

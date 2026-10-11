@@ -6,6 +6,7 @@
 #include "ztd_str.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 
 struct config_bind {
   struct kb_keypress key;
@@ -87,5 +88,11 @@ bool config_default_path(StrBuf* out);
  * lines are skipped with a warning. Returns 0, 1 if the file doesn't exist,
  * or -1 if it couldn't be read. */
 int config_load_file(struct config* cfg, const char* path);
+
+/* Applies one command-line override, [section.]key=value, on top of what cfg
+ * already holds; the section defaults to main, and the value is read as in
+ * the file. n numbers the override in warnings. Bad overrides are skipped with
+ * a warning. Returns false on allocation failure. */
+bool config_apply_override(struct config* cfg, size_t n, const char* arg);
 
 #endif  // !LM_CONFIG_H
