@@ -61,7 +61,6 @@ static void test_file(void) {
                   "lines = 5\n"
                   "padding = -1\n"  // out of range: kept
                   "header = one\\ntwo\n"
-                  "border-label-pos = -10:bottom\n"
                   "show-counter = off\n"
                   "bogus = 1\n"
                   "[colors]\n"
@@ -81,7 +80,6 @@ static void test_file(void) {
   CHECK(cfg.ui.lines == 5);
   CHECK(cfg.ui.padding == 14);
   CHECK_STR(sb_str(&cfg.ui.header), "one\ntwo");
-  CHECK(cfg.ui.border_label_pos == -10 && cfg.ui.border_label_bottom);
   CHECK(!cfg.ui.show_counter);
   CHECK(cfg.ui.colors.text.r == 1.0 && cfg.ui.colors.text.g == 0.0);
   CHECK(cfg.ui.colors.text.a > 0.5 && cfg.ui.colors.text.a < 0.51);

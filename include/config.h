@@ -38,14 +38,13 @@ struct config_colors {
   struct config_color counter;
   struct config_color separator;
   struct config_color header;
-  struct config_color border_label;
 };
 
 /* Sizes are in logical pixels. */
 struct config_ui {
   StrBuf font;  // pango font description, e.g. "Sans 13"
-  /* prompt, header and border_label are the initial values; actions change
-   * the state's copies. */
+  /* prompt and header are the initial values, copied into the state, where
+   * change-prompt changes the prompt. */
   StrBuf prompt;
   StrBuf placeholder;  // shown while the query is empty
   int width;           // pixels, or a percentage of the output if
@@ -56,25 +55,20 @@ struct config_ui {
   int border_width;
   int border_radius;
   int selection_radius;
-  bool fuzzy;            // match the query as a subsequence, best matches first
-  bool show_counter;     // "matches/entries" at the right of the query row
-  StrBuf header;         // lines between the query and the rows; may be empty
-  StrBuf border_label;   // drawn in a gap in the border; may be empty
-  int border_label_pos;  // 0 centers it, N > 0 puts it N pixels from the left
-                         //   edge, N < 0 -N pixels from the right one
-  bool border_label_bottom;  // on the bottom border instead of the top
+  bool fuzzy;         // match the query as a subsequence, best matches first
+  bool show_counter;  // "matches/entries" at the right of the query row
+  StrBuf header;      // lines between the query and the rows; may be empty
   struct config_colors colors;
 };
 
 /* How a [main] key's value is read. */
 enum config_kind {
   CONFIG_STRING,
-  CONFIG_TEXT,       // a string in which \n breaks lines
-  CONFIG_INT,        // from min to 1000
-  CONFIG_BOOL,       // yes/no, true/false, on/off, 1/0
-  CONFIG_WIDTH,      // sets width and width_percent
-  CONFIG_LABEL_POS,  // sets border_label_pos and border_label_bottom
-  CONFIG_MATCH,      // substring|fuzzy, sets fuzzy
+  CONFIG_TEXT,   // a string in which \n breaks lines
+  CONFIG_INT,    // from min to 1000
+  CONFIG_BOOL,   // yes/no, true/false, on/off, 1/0
+  CONFIG_WIDTH,  // sets width and width_percent
+  CONFIG_MATCH,  // substring|fuzzy, sets fuzzy
 };
 
 struct config_key {
@@ -153,9 +147,5 @@ void config_set_bind(struct config* cfg, const char* arg);
  * last bind for it wins. NULL if none is bound, or bound to none. */
 const struct config_bind* config_find_bind(const struct config* cfg,
                                            const struct kb_result* key);
-
-/* Sets dst to s with each \n turned into a line break, as headers are
- * written. */
-void config_unescape(StrBuf* dst, Str s);
 
 #endif  // !LM_CONFIG_H

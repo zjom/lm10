@@ -57,7 +57,6 @@ struct state {
   /* Texts drawn around the query; actions can change them. Heap-backed. */
   StrBuf prompt;
   StrBuf header;  // lines between the query and the rows; may be empty
-  StrBuf border_label;
   uint64_t gen;
 };
 
@@ -98,7 +97,6 @@ void state_cursor_move(struct state* state, enum state_motion motion);
 /* Replace the texts around the query (the header's lines are split by \n). */
 void state_set_prompt(struct state* state, Str text);
 void state_set_header(struct state* state, Str text);
-void state_set_border_label(struct state* state, Str text);
 
 /* Matches the query as a subsequence, ranking the best matches first,
  * rather than as a substring in entry order. */

@@ -16,8 +16,7 @@ void config_init(struct config* cfg) {
       .ui = {.font = STRBUF_INIT,
              .prompt = STRBUF_INIT,
              .placeholder = STRBUF_INIT,
-             .header = STRBUF_INIT,
-             .border_label = STRBUF_INIT},
+             .header = STRBUF_INIT},
   };
 }
 
@@ -28,7 +27,6 @@ void config_destroy(struct config* cfg) {
   sb_free(&cfg->ui.prompt);
   sb_free(&cfg->ui.placeholder);
   sb_free(&cfg->ui.header);
-  sb_free(&cfg->ui.border_label);
 }
 
 static void set_str(StrBuf* dst, Str s) {
@@ -36,7 +34,8 @@ static void set_str(StrBuf* dst, Str s) {
   sb_append(dst, s);
 }
 
-void config_unescape(StrBuf* dst, Str s) {
+/* Sets dst to s with each \n turned into a line break. */
+static void config_unescape(StrBuf* dst, Str s) {
   sb_clear(dst);
   Str before, after;
   while (str_cut(s, STR("\\n"), &before, &after)) {
@@ -63,8 +62,6 @@ static void load_default_ui(struct config_ui* ui) {
   ui->selection_radius = 8;
   ui->fuzzy = false;
   ui->show_counter = true;
-  ui->border_label_pos = 0;
-  ui->border_label_bottom = false;
   ui->colors = (struct config_colors){
       .background = RGBA(0x141415f2),
       .border = RGBA(0x878787ff),
@@ -80,13 +77,11 @@ static void load_default_ui(struct config_ui* ui) {
       .counter = RGBA(0x606079ff),
       .separator = RGBA(0x252530ff),
       .header = RGBA(0x878787ff),
-      .border_label = RGBA(0xcdcdcdff),
   };
   set_str(&ui->font, STR("Sans 13"));
   set_str(&ui->prompt, STR("❯ "));
   set_str(&ui->placeholder, STR("Search…"));
   set_str(&ui->header, STR(""));
-  set_str(&ui->border_label, STR(""));
 }
 
 bool config_default_path(StrBuf* out) {
@@ -169,24 +164,6 @@ static bool parse_width(Str v, int* out, bool* percent) {
   return true;
 }
 
-/* N[:top|:bottom], N as for border-label-pos */
-static bool parse_label_pos(Str v, int* out, bool* bottom) {
-  Str n, side;
-  str_cut(v, STR(":"), &n, &side);  // no side leaves it empty
-  side = str_trim(side);
-  bool b;
-  if (side.len == 0 || str_eq_cstr(side, "top"))
-    b = false;
-  else if (str_eq_cstr(side, "bottom"))
-    b = true;
-  else
-    return false;
-  if (!parse_int(str_trim(n), -100000, 100000, out))
-    return false;
-  *bottom = b;
-  return true;
-}
-
 #define UI(field) offsetof(struct config_ui, field)
 
 const struct config_key config_main_keys[] = {
@@ -194,9 +171,6 @@ const struct config_key config_main_keys[] = {
     {"prompt", "TEXT", CONFIG_STRING, UI(prompt), 0},
     {"placeholder", "TEXT", CONFIG_STRING, UI(placeholder), 0},
     {"header", "TEXT", CONFIG_TEXT, UI(header), 0},
-    {"border-label", "TEXT", CONFIG_STRING, UI(border_label), 0},
-    {"border-label-pos", "N[:top|:bottom]", CONFIG_LABEL_POS,
-     UI(border_label_pos), 0},
     {"width", "N|N%", CONFIG_WIDTH, UI(width), 0},
     {"match", "substring|fuzzy", CONFIG_MATCH, UI(fuzzy), 0},
     {"lines", "N", CONFIG_INT, UI(lines), 1},
@@ -226,7 +200,6 @@ const struct config_color_key config_color_keys[] = {
     COLOR("counter", counter),
     COLOR("separator", separator),
     COLOR("header", header),
-    COLOR("border-label", border_label),
 };
 #undef COLOR
 const size_t config_n_color_keys =
@@ -274,12 +247,6 @@ static void set_main(struct config_ui* ui,
         ui->fuzzy = true;
       else
         PARSE_WARN(loc, "%s", "match must be substring or fuzzy");
-      break;
-    case CONFIG_LABEL_POS:
-      if (!parse_label_pos(val, &ui->border_label_pos,
-                           &ui->border_label_bottom))
-        PARSE_WARN(loc, "%s",
-                   "border-label-pos must be N, N:top or N:bottom (0 centers)");
       break;
   }
 }

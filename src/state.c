@@ -16,7 +16,6 @@ void state_init(struct state* state) {
       .matches = LIST_INIT,
       .prompt = STRBUF_INIT,
       .header = STRBUF_INIT,
-      .border_label = STRBUF_INIT,
   };
   state->entries = (StateEntryList)LIST_INIT_ARENA(&state->arena);
 }
@@ -28,7 +27,6 @@ void state_destroy(struct state* state) {
   LIST_FREE(&state->matches);
   sb_free(&state->prompt);
   sb_free(&state->header);
-  sb_free(&state->border_label);
   *state = (struct state){0};
 }
 
@@ -461,10 +459,6 @@ void state_set_prompt(struct state* state, Str text) {
 
 void state_set_header(struct state* state, Str text) {
   set_text(state, &state->header, text);
-}
-
-void state_set_border_label(struct state* state, Str text) {
-  set_text(state, &state->border_label, text);
 }
 
 /* ---- selection ---- */

@@ -25,8 +25,6 @@ static const struct {
     [ACTION_MATCH_PREV] = {"match-prev", false},
     [ACTION_CHANGE_PROMPT] = {"change-prompt", true},
     [ACTION_CHANGE_QUERY] = {"change-query", true},
-    [ACTION_CHANGE_HEADER] = {"change-header", true},
-    [ACTION_CHANGE_BORDER_LABEL] = {"change-border-label", true},
     [ACTION_RELOAD] = {"reload", true},
     [ACTION_EXECUTE] = {"execute", true},
 };

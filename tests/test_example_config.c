@@ -136,10 +136,6 @@ static void test_defaults(const char* path) {
       case CONFIG_WIDTH:
         same = d->width == e->width && d->width_percent == e->width_percent;
         break;
-      case CONFIG_LABEL_POS:
-        same = d->border_label_pos == e->border_label_pos &&
-               d->border_label_bottom == e->border_label_bottom;
-        break;
     }
     if (!same) {
       fprintf(stderr, "  [main] %s isn't the default\n", k->name);

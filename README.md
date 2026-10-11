@@ -54,8 +54,8 @@ lm10 --width 40% --color background=#000000 --bind Escape=cancel
 ```
 
 A key binding runs a list of actions joined by `+`. Besides editing and moving
-the selection, actions can change the prompt, header and border label, reload
-the entries from a command, or run a command against the selection:
+the selection, actions can change the prompt, reload the entries from a
+command, or run a command against the selection:
 
 ```ini
 [keys]
@@ -71,7 +71,7 @@ boundaries and next to each other.
 `lm10 --help` gives a summary of the flags and actions.
 
 Logging defaults to warnings. `-v` adds debug output, and `-vv` adds trace
-output. `LM10_LOG=error|warn|info|debug|trace` sets the level as well.
+output.
 
 ## Examples
 

@@ -128,7 +128,6 @@ static void test_gen(void) {
   CHANGED(state_select_prev(&st));
   CHANGED(state_set_prompt(&st, STR("> ")));
   CHANGED(state_set_header(&st, STR("a\nb")));
-  CHANGED(state_set_border_label(&st, STR(" x ")));
   CHANGED(state_query_set(&st, STR("t")));
   CHANGED(state_clear_entries(&st));
 #undef CHANGED

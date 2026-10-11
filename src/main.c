@@ -218,16 +218,6 @@ static bool run_action(struct app* app, const struct action* a) {
     case ACTION_CHANGE_QUERY:
       state_query_set(st, a->arg);
       break;
-    case ACTION_CHANGE_HEADER: {
-      StrBuf header = STRBUF_INIT;
-      config_unescape(&header, a->arg);
-      state_set_header(st, sb_str(&header));
-      sb_free(&header);
-      break;
-    }
-    case ACTION_CHANGE_BORDER_LABEL:
-      state_set_border_label(st, a->arg);
-      break;
     case ACTION_RELOAD:
     case ACTION_EXECUTE: {
       StrBuf cmd = STRBUF_INIT;
@@ -293,8 +283,7 @@ static void usage(FILE* f, const char* argv0) {
           "\n"
           "  -c, --config PATH  config file (default: "
           "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
-          "  -v, --verbose      log more; twice for even more (or set\n"
-          "                     LM10_LOG=error|warn|info|debug|trace)\n"
+          "  -v, --verbose      log more; twice for even more\n"
           "  -h, --help         show this help\n"
           "\n"
           "These override the config file, in order (see lm10.ini):\n",
@@ -306,42 +295,20 @@ static void usage(FILE* f, const char* argv0) {
       "  --color NAME=#rrggbb[aa][,NAME=...]  set [colors] keys\n"
       "  --bind KEY=ACTION[+ACTION...]        bind a key, or none\n"
       "e.g. --width 40% --bind Escape=cancel --color text=#ffffff\n"
-      "     --header 'Pick one\\nor not' --border-label ' lm10 '\n"
-      "     --border-label-pos 10:bottom\n"
+      "     --header 'Pick one\\nor not'\n"
       "\n"
       "A key runs actions joined by '+', some taking an argument:\n"
       "  --bind 'Control+r=change-prompt(> )+reload(ls ~)'\n"
-      "change-prompt(T), change-query(T), change-header(T),\n"
-      "change-border-label(T), reload(CMD) and execute(CMD) join the\n"
-      "built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
+      "change-prompt(T), change-query(T), reload(CMD) and execute(CMD)\n"
+      "join the built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
       "{N..M} become the selection's command, name, the query and argv\n"
       "words, shell-quoted.\n",
       f);
 }
 
-/* Sets the log level from LM10_LOG, then raises it by verbose steps from
- * the default, warnings. */
+/* Raises the log level by verbose steps from the default, warnings. */
 static void set_log_level(int verbose) {
-  static const struct {
-    const char* name;
-    int level;
-  } levels[] = {
-      {"trace", LOG_LEVEL_TRACE}, {"debug", LOG_LEVEL_DEBUG},
-      {"info", LOG_LEVEL_INFO},   {"warn", LOG_LEVEL_WARN},
-      {"error", LOG_LEVEL_ERROR}, {"off", LOG_LEVEL_OFF},
-  };
   int level = LOG_LEVEL_WARN;
-  const char* env = getenv("LM10_LOG");
-  if (env != NULL && env[0] != '\0') {
-    size_t i = 0;
-    while (i < sizeof levels / sizeof levels[0] &&
-           strcmp(env, levels[i].name) != 0)
-      i++;
-    if (i < sizeof levels / sizeof levels[0])
-      level = levels[i].level;
-    else
-      fprintf(stderr, "lm10: ignoring LM10_LOG=%s\n", env);
-  }
   if (verbose > 0)
     level = verbose == 1 ? LOG_LEVEL_DEBUG : LOG_LEVEL_TRACE;
   log_set_level(level);
@@ -451,7 +418,6 @@ int main(int argc, char** argv) {
   const struct config_ui* ui = &app.config.ui;
   state_set_prompt(&app.state, sb_str(&ui->prompt));
   state_set_header(&app.state, sb_str(&ui->header));
-  state_set_border_label(&app.state, sb_str(&ui->border_label));
   state_set_fuzzy(&app.state, ui->fuzzy);
 
   app.wayl = wayl_new(&app.fdm, &app, "lm10");
