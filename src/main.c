@@ -14,7 +14,7 @@
  * Run inside a Wayland session (GNOME, KDE, Sway, ...):
  *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-X foot' |
  * ./bld/debug/lm10
- *   ./bld/debug/lm10 < menu.jsonc
+ *   ./bld/debug/lm10 < examples/session.jsonc
  */
 #include <assert.h>
 #include <errno.h>
