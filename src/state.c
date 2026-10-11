@@ -63,10 +63,14 @@ bool state_push(struct state* state,
                 enum state_run run) {
   struct state_entry e = {
       .argv = LIST_INIT_ARENA(&state->arena),
-      .icon = str_arena_dup(&state->arena, icon),
       .run = run,
   };
-  if (e.icon.ptr == NULL || !LIST_RESERVE(&e.argv, argv->len)) {
+  if (icon.ptr != NULL) {
+    e.icon = str_arena_dup(&state->arena, icon);
+    if (e.icon.ptr == NULL)
+      return false;
+  }
+  if (!LIST_RESERVE(&e.argv, argv->len)) {
     return false;
   }
   ARR_FOREACH(const Str, w, argv) {
@@ -78,7 +82,7 @@ bool state_push(struct state* state,
 
   /* Apps are usually installed with an icon named after their binary. The
    * basename ends where argv[0] does, so it stays NUL-terminated. */
-  if (e.icon.len == 0) {
+  if (icon.ptr == NULL) {
     Str cmd = e.argv.ptr[0];
     size_t slash = str_rfind_char(cmd, '/');
     e.icon = slash == STR_NPOS ? cmd : str_slice(cmd, slash + 1, cmd.len);

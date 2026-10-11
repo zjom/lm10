@@ -19,7 +19,7 @@ enum state_run {
 struct state_entry {
   Str name;           // NUL-terminated, lives in the state arena
   StrList argv;       // each Str NUL-terminated, lives in the state arena
-  Str icon;           // NUL-terminated, lives in the state arena
+  Str icon;           // NUL-terminated, lives in the state arena; may be empty
   bool icon_guessed;  // icon wasn't given; it is the command's basename
   enum state_run run;
 };
@@ -43,9 +43,9 @@ void state_init(struct state* state);
 void state_destroy(struct state* state);
 
 /* Copies name, argv and icon into state->arena. argv must be non-empty. If
- * name is empty, argv joined with spaces is used; if icon is, the basename
- * of argv[0]. Returns false on allocation
- * failure. */
+ * name is empty, argv joined with spaces is used. If icon is null (ptr NULL),
+ * the basename of argv[0] is guessed; an empty non-null icon means none.
+ * Returns false on allocation failure. */
 bool state_push(struct state* state,
                 Str name,
                 const StrList* argv,

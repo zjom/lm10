@@ -1,6 +1,7 @@
 /*
  * lm10: a Wayland picker. Lists entries read from stdin, one per line as
- * `[-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]`; typing filters them,
+ * `[-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]` or as JSON objects (see
+ * input.h); typing filters them,
  * C-n / C-p move the selection, Return picks it: -x execs it, -X runs it
  * detached, and otherwise its command line is printed to stdout.
  *
@@ -13,6 +14,7 @@
  * Run inside a Wayland session (GNOME, KDE, Sway, ...):
  *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-X foot' |
  * ./bld/debug/lm10
+ *   ./bld/debug/lm10 < menu.jsonc
  */
 #include <assert.h>
 #include <errno.h>
@@ -389,9 +391,14 @@ static void usage(FILE* f, const char* argv0) {
           "\n"
           "Reads entries from stdin, one per line:\n"
           "  [-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]\n"
+          "or, if stdin starts with '{', '[' or a comment, as JSON(C) values,\n"
+          "each an entry object or an array of them:\n"
+          "  {\"name\": NAME, \"icon\": ICON, \"run\": \"print\"|\"exec\"|"
+          "\"detach\",\n"
+          "   \"command\": \"COMMAND ARG...\" | [COMMAND, ARG...]}\n"
           "\n"
-          "Picking one execs it (-x), runs it detached (-X), or else prints\n"
-          "its command line to stdout.\n"
+          "Picking one execs it (-x, \"exec\"), runs it detached (-X,\n"
+          "\"detach\"), or else prints its command line to stdout.\n"
           "\n"
           "  -c, --config PATH  config file (default: "
           "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
