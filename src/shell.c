@@ -2,7 +2,7 @@
 
 #include <string.h>
 
-bool shell_quote(StrBuf* out, Str s) {
+void shell_quote(StrBuf* out, Str s) {
   static const char safe[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
       "0123456789@%+=:,./_-";
@@ -10,8 +10,10 @@ bool shell_quote(StrBuf* out, Str s) {
   bool plain = s.len > 0 && s.ptr[0] != '=';
   for (size_t i = 0; plain && i < s.len; i++)
     plain = s.ptr[i] != '\0' && strchr(safe, s.ptr[i]) != NULL;
-  if (plain)
-    return sb_append(out, s);
+  if (plain) {
+    sb_append(out, s);
+    return;
+  }
 
   sb_append_char(out, '\'');
   for (size_t i = 0; i < s.len; i++) {
@@ -20,5 +22,5 @@ bool shell_quote(StrBuf* out, Str s) {
     else
       sb_append_char(out, s.ptr[i]);
   }
-  return sb_append_char(out, '\'');
+  sb_append_char(out, '\'');
 }

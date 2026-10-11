@@ -6,8 +6,7 @@
 #include <stdbool.h>
 
 /* Appends s to out quoted for sh, bash and zsh: as is if it is made only of
- * characters no shell treats specially, single-quoted otherwise. Returns
- * false on allocation failure. */
-bool shell_quote(StrBuf* out, Str s);
+ * characters no shell treats specially, single-quoted otherwise. */
+void shell_quote(StrBuf* out, Str s);
 
 #endif  // !LM_SHELL_H

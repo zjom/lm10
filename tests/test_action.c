@@ -5,7 +5,7 @@
 
 static void check_quote(const char* s, const char* want) {
   StrBuf out = STRBUF_INIT;
-  CHECK(shell_quote(&out, str_from_cstr(s)));
+  shell_quote(&out, str_from_cstr(s));
   CHECK_STR(sb_str(&out), want);
   sb_free(&out);
 }
@@ -28,7 +28,7 @@ static void test_quote(void) {
 /* Expands tmpl against st, checking the result. */
 static void check_expand(struct state* st, const char* tmpl, const char* want) {
   StrBuf out = STRBUF_INIT;
-  CHECK(action_expand(&out, str_from_cstr(tmpl), st));
+  action_expand(&out, str_from_cstr(tmpl), st);
   CHECK_STR(sb_str(&out), want);
   sb_free(&out);
 }

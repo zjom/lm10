@@ -63,7 +63,7 @@ bool action_takes_arg(enum action_kind kind);
  *   {N..M}  argv words N to M inclusive; either end may be left out
  *
  * With no selection, or out of range, they expand to ''. Other braces are
- * copied as is. Returns false on allocation failure. */
-bool action_expand(StrBuf* out, Str tmpl, const struct state* state);
+ * copied as is. */
+void action_expand(StrBuf* out, Str tmpl, const struct state* state);
 
 #endif  // !LM_ACTION_H

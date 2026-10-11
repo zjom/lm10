@@ -29,6 +29,7 @@
 #include "shell.h"
 #include "spawn.h"
 #include "state.h"
+#include "util.h"
 #include "wayl.h"
 
 struct app {
@@ -53,14 +54,9 @@ enum {
   EXIT_CANCELLED = 130,  // nothing was picked, as in fzf
 };
 
-/* A NULL-terminated argv pointing into entry, or NULL on allocation failure.
- * Free with free(). */
+/* A NULL-terminated argv pointing into entry. Free with free(). */
 static char** entry_argv(const struct state_entry* entry) {
-  char** argv = calloc(entry->argv.len + 1, sizeof *argv);
-  if (argv == NULL) {
-    LOG_ERROR("allocation failed");
-    return NULL;
-  }
+  char** argv = xcalloc(entry->argv.len + 1, sizeof *argv);
   for (size_t i = 0; i < entry->argv.len; i++)
     argv[i] = (char*)entry->argv.ptr[i].ptr;  // NUL-terminated
   return argv;
@@ -77,11 +73,9 @@ static bool print_entry(const struct state_entry* entry) {
     shell_quote(&line, *s);
   }
   sb_append_char(&line, '\n');
-  bool ok = !line.failed;
-  if (!ok)
-    LOG_ERROR("allocation failed");
-  else if (fwrite(line.ptr, 1, line.len, stdout) != line.len ||
-           fflush(stdout) != 0) {
+  bool ok = true;
+  if (fwrite(line.ptr, 1, line.len, stdout) != line.len ||
+      fflush(stdout) != 0) {
     LOG_ERROR("failed to write to stdout: %s", strerror(errno));
     ok = false;
   }
@@ -103,8 +97,6 @@ static bool run_entry(const struct state_entry* entry, const char* token) {
     return print_entry(entry);
 
   char** argv = entry_argv(entry);
-  if (argv == NULL)
-    return false;
   bool ok = false;
   if (entry->run == STATE_RUN_EXEC)
     spawn_exec(argv, token);
@@ -181,7 +173,6 @@ static void execute(const char* cmd) {
  * skipped. */
 static bool run_action(struct app* app, const struct action* a) {
   struct state* st = &app->state;
-  bool ok = true;
 
   switch (a->kind) {
     case ACTION_CANCEL:
@@ -259,20 +250,15 @@ static bool run_action(struct app* app, const struct action* a) {
     case ACTION_EXECUTE: {
       StrBuf cmd = STRBUF_INIT;
       bool stop = false;
-      if (!action_expand(&cmd, a->arg, st)) {
-        LOG_WARN("%s: allocation failed", action_name(a->kind));
-        stop = true;
-      } else if (a->kind == ACTION_EXECUTE) {
+      action_expand(&cmd, a->arg, st);
+      if (a->kind == ACTION_EXECUTE)
         execute(sb_cstr(&cmd));
-      } else if (!reload(app, sb_cstr(&cmd))) {
-        stop = true;
-      }
+      else
+        stop = !reload(app, sb_cstr(&cmd));
       sb_free(&cmd);
       return stop;
     }
   }
-  if (!ok)
-    LOG_WARN("%s: allocation failed", action_name(a->kind));
   return false;
 }
 
@@ -433,12 +419,8 @@ int main(int argc, char** argv) {
   bool fdm_ok = false, render_ok = false, input_ok = false;
   const char* config_path = NULL;
   /* config flags, in order; there are fewer than argc of them */
-  struct flag* flags = calloc((size_t)argc, sizeof(*flags));
+  struct flag* flags = xcalloc((size_t)argc, sizeof(*flags));
   size_t n_flags = 0;
-  if (flags == NULL) {
-    LOG_FATAL("allocation failed");
-    return EXIT_ERROR;
-  }
 
   static const struct option fixed_opts[] = {
       {"config", required_argument, NULL, 'c'},
@@ -448,12 +430,7 @@ int main(int argc, char** argv) {
       {"bind", required_argument, NULL, OPT_BIND},
   };
   enum { N_FIXED = sizeof fixed_opts / sizeof fixed_opts[0] };
-  struct option* opts = calloc(N_FIXED + config_n_main_keys + 1, sizeof *opts);
-  if (opts == NULL) {
-    LOG_FATAL("allocation failed");
-    free(flags);
-    return EXIT_ERROR;
-  }
+  struct option* opts = xcalloc(N_FIXED + config_n_main_keys + 1, sizeof *opts);
   memcpy(opts, fixed_opts, sizeof fixed_opts);
   for (size_t i = 0; i < config_n_main_keys; i++)
     opts[N_FIXED + i] = (struct option){

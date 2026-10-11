@@ -109,7 +109,7 @@ static bool expand_one(StrBuf* out, Str name, const struct state* state) {
   return true;
 }
 
-bool action_expand(StrBuf* out, Str tmpl, const struct state* state) {
+void action_expand(StrBuf* out, Str tmpl, const struct state* state) {
   sb_clear(out);
   size_t i = 0;
   while (i < tmpl.len) {
@@ -131,5 +131,4 @@ bool action_expand(StrBuf* out, Str tmpl, const struct state* state) {
     }
     i = open + 1 + close + 1;
   }
-  return !out->failed;
 }
