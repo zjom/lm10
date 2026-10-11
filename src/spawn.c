@@ -52,6 +52,10 @@ pid_t spawn_sh(const char* cmd, int out_fd, bool new_group) {
 }
 
 bool spawn_detached(char* const argv[], const char* token) {
+  /* Set here rather than in the child, where setenv's allocation isn't safe
+   * if another thread exists; lm10 is about to exit anyway. */
+  set_activation_env(token);
+
   /* The grandchild reports a failed exec through this pipe; a successful
    * one closes it (O_CLOEXEC), so the parent reads EOF. */
   int fds[2];
@@ -74,7 +78,6 @@ bool spawn_detached(char* const argv[], const char* token) {
     close(fds[0]);
     if (setsid() == -1)
       goto child_err;
-    set_activation_env(token);
     pid_t gpid = fork();
     if (gpid == -1)
       goto child_err;

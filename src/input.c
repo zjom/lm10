@@ -110,8 +110,6 @@ int input_init_command(struct input* in,
     return -1;
   }
   procs_watch(procs, pid);
-  /* Only our end: reads must never block the event loop. */
-  fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL) | O_NONBLOCK);
 
   *in = (struct input){
       .fdm = fdm,

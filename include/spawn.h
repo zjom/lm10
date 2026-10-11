@@ -13,8 +13,8 @@
 pid_t spawn_sh(const char* cmd, int out_fd, bool new_group);
 
 /* Runs argv (NULL-terminated) in a new session, detached from lm10, with
- * stdin on /dev/null and the activation token, if any, in its environment.
- * Returns once it has exec'd: true, or false (logged) if it couldn't. */
+ * stdin on /dev/null and the activation token, if any, in its environment
+ * (set in lm10's too). Returns once it has exec'd: true, or false (logged) if it couldn't. */
 bool spawn_detached(char* const argv[], const char* token);
 
 /* Replaces lm10 with argv, which keeps its terminal, session and stdout.
