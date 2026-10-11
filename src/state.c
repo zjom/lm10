@@ -76,6 +76,15 @@ bool state_push(struct state* state,
     }
   }
 
+  /* Apps are usually installed with an icon named after their binary. The
+   * basename ends where argv[0] does, so it stays NUL-terminated. */
+  if (e.icon.len == 0) {
+    Str cmd = e.argv.ptr[0];
+    size_t slash = str_rfind_char(cmd, '/');
+    e.icon = slash == STR_NPOS ? cmd : str_slice(cmd, slash + 1, cmd.len);
+    e.icon_guessed = true;
+  }
+
   if (name.len != 0) {
     e.name = str_arena_dup(&state->arena, name);
   } else {

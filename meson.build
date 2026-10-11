@@ -19,6 +19,7 @@ fs = import('fs')
 wayland_client = dependency('wayland-client', include_type: 'system')
 wayland_protocols = dependency('wayland-protocols', version: '>=1.31')
 pangocairo = dependency('pangocairo', include_type: 'system')
+librsvg = dependency('librsvg-2.0', include_type: 'system')
 xkbcommon = dependency('xkbcommon', include_type: 'system')
 m = meson.get_compiler('c').find_library('m', required: false)
 
@@ -77,6 +78,7 @@ srcs = files(
   'src/fdm.c',
   'src/input.c',
   'src/frame.c',
+  'src/icon.c',
   'src/main.c',
   'src/render.c',
   'src/state.c',
@@ -94,6 +96,7 @@ executable(
   dependencies: [
     wayland_client,
     pangocairo,
+    librsvg,
     xkbcommon,
     m,
   ],

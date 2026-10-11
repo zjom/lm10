@@ -14,7 +14,7 @@
  *   [OPTION...] COMMAND [ARG...]
  *
  *   -n/--name NAME   display name; defaults to the command line
- *   -i/--icon ICON   display icon
+ *   -i/--icon ICON   display icon; defaults to the command's basename
  *   -D/--detached    run in a new session, detached from the terminal
  *
  * Long options also accept --opt=VALUE, and "--" ends the options. Malformed

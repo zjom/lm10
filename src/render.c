@@ -91,7 +91,7 @@ int render_init(struct render* r,
   *r = (struct render){
       .surface = surface, .shm = shm, .state = state, .scale120 = 120};
   if (draw_ctx_init(&r->dctx, ui) != 0) {
-    LOG_ERROR("failed to create font description");
+    LOG_ERROR("failed to set up drawing (bad font or out of memory)");
     return -1;
   }
   return 0;

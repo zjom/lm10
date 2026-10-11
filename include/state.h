@@ -10,10 +10,11 @@
 #include <stdint.h>
 
 struct state_entry {
-  Str name;       // NUL-terminated, lives in the state arena
-  StrList argv;   // each Str NUL-terminated, lives in the state arena
-  Str icon;       // NUL-terminated, lives in the state arena; empty if unset
-  bool detached;  // run in a new session instead of in place of lm10
+  Str name;           // NUL-terminated, lives in the state arena
+  StrList argv;       // each Str NUL-terminated, lives in the state arena
+  Str icon;           // NUL-terminated, lives in the state arena
+  bool icon_guessed;  // icon wasn't given; it is the command's basename
+  bool detached;      // run in a new session instead of in place of lm10
 };
 
 typedef LIST(struct state_entry) StateEntryList;
@@ -35,7 +36,8 @@ void state_init(struct state* state);
 void state_destroy(struct state* state);
 
 /* Copies name, argv and icon into state->arena. argv must be non-empty. If
- * name is empty, argv joined with spaces is used. Returns false on allocation
+ * name is empty, argv joined with spaces is used; if icon is, the basename
+ * of argv[0]. Returns false on allocation
  * failure. */
 bool state_push(struct state* state,
                 Str name,

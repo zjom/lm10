@@ -16,7 +16,8 @@ void config_init(struct config* cfg) {
       .binds = LIST_INIT,
       .ui = {.font = STRBUF_INIT,
              .prompt = STRBUF_INIT,
-             .placeholder = STRBUF_INIT},
+             .placeholder = STRBUF_INIT,
+             .icon_theme = STRBUF_INIT},
   };
 }
 
@@ -25,6 +26,7 @@ void config_destroy(struct config* cfg) {
   sb_free(&cfg->ui.font);
   sb_free(&cfg->ui.prompt);
   sb_free(&cfg->ui.placeholder);
+  sb_free(&cfg->ui.icon_theme);
 }
 
 static bool set_str(StrBuf* dst, Str s) {
@@ -47,6 +49,7 @@ static bool load_default_ui(struct config_ui* ui) {
   ui->border_radius = 12;
   ui->selection_radius = 8;
   ui->show_counter = true;
+  ui->icons = true;
   ui->colors = (struct config_colors){
       .background = RGBA(0x141415f2),
       .border = RGBA(0x878787ff),
@@ -64,7 +67,8 @@ static bool load_default_ui(struct config_ui* ui) {
   };
   return set_str(&ui->font, STR("Sans 13")) &&
          set_str(&ui->prompt, STR("❯ ")) &&
-         set_str(&ui->placeholder, STR("Search…"));
+         set_str(&ui->placeholder, STR("Search…")) &&
+         set_str(&ui->icon_theme, STR("hicolor"));
 }
 
 bool config_load_defaults(struct config* cfg) {
@@ -210,6 +214,7 @@ static bool set_main(struct config_ui* ui,
       {"font", offsetof(struct config_ui, font)},
       {"prompt", offsetof(struct config_ui, prompt)},
       {"placeholder", offsetof(struct config_ui, placeholder)},
+      {"icon-theme", offsetof(struct config_ui, icon_theme)},
   };
 
   for (size_t i = 0; i < sizeof ints / sizeof ints[0]; i++) {
@@ -231,6 +236,9 @@ static bool set_main(struct config_ui* ui,
   } else if (str_eq_cstr(key, "show-counter")) {
     if (!parse_bool(val, &ui->show_counter))
       PARSE_WARN(loc, "%s", "show-counter must be yes or no");
+  } else if (str_eq_cstr(key, "icons")) {
+    if (!parse_bool(val, &ui->icons))
+      PARSE_WARN(loc, "%s", "icons must be yes or no");
   } else {
     PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [main]", STR_ARG(key));
   }

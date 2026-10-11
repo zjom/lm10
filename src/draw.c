@@ -10,6 +10,8 @@
 #define COUNTER_GAP 12
 #define CURSOR_W 2
 #define SCROLLBAR_W 3
+/* Gap between a row's icon and its name. */
+#define ICON_GAP 8
 
 int draw_ctx_init(struct draw_ctx* dc, const struct config_ui* ui) {
   *dc = (struct draw_ctx){.ui = ui};
@@ -27,12 +29,21 @@ int draw_ctx_init(struct draw_ctx* dc, const struct config_ui* ui) {
   pango_layout_get_pixel_size(layout, NULL, &dc->line_h);
   g_object_unref(layout);
   g_object_unref(ctx);
+
+  if (ui->icons) {
+    dc->icons = icon_cache_new(sb_cstr(&ui->icon_theme));
+    if (dc->icons == NULL) {
+      draw_ctx_destroy(dc);
+      return -1;
+    }
+  }
   return 0;
 }
 
 void draw_ctx_destroy(struct draw_ctx* dc) {
   if (dc->font)
     pango_font_description_free(dc->font);
+  icon_cache_destroy(dc->icons);
   *dc = (struct draw_ctx){0};
 }
 
@@ -134,6 +145,38 @@ static PangoAttrList* highlight(size_t start,
     pango_attr_list_insert(attrs, a[i]);
   }
   return attrs;
+}
+
+/* The entry's icon rendered at the text height in buffer pixels, or NULL.
+ * Guessed icons that don't exist are expected, so they don't warn. */
+static cairo_surface_t* entry_icon(struct draw_ctx* dc,
+                                   cairo_t* cr,
+                                   const struct state_entry* e) {
+  double px = dc->line_h, unused = 0;
+  cairo_user_to_device_distance(cr, &px, &unused);
+  return icon_cache_get(dc->icons, e->icon, (int)lround(px), !e->icon_guessed);
+}
+
+/* Paints an icon with its top left at x, y, snapped to buffer pixels so it
+ * stays sharp at any scale. Symbolic icons are monochrome shapes, so they
+ * take the text color like they do in GTK. */
+static void draw_icon(cairo_t* cr,
+                      cairo_surface_t* icon,
+                      Str name,
+                      struct config_color text,
+                      double x,
+                      double y) {
+  cairo_user_to_device(cr, &x, &y);
+  cairo_save(cr);
+  cairo_identity_matrix(cr);
+  if (str_ends_with(name, STR("-symbolic"))) {
+    set_color(cr, text);
+    cairo_mask_surface(cr, icon, round(x), round(y));
+  } else {
+    cairo_set_source_surface(cr, icon, round(x), round(y));
+    cairo_paint(cr);
+  }
+  cairo_restore(cr);
 }
 
 /* ---- parts ---- */
@@ -250,6 +293,13 @@ static void draw_rows(const struct state* v,
 
   /* Leave room for a scrollbar in the right padding when it's needed. */
   bool scrollbar = n > visible && ui->padding >= SCROLLBAR_W + 2;
+  /* Every row gets the icon column once a visible icon has loaded, so names
+   * line up, and it stays so they don't jump around while filtering. */
+  for (size_t i = dc->first;
+       dc->icons && !dc->icon_column && i < n && i < dc->first + visible; i++)
+    dc->icon_column = entry_icon(dc, cr, state_match(v, i)) != NULL;
+  double icon_w = dc->icon_column ? dc->line_h + ICON_GAP : 0;
+  double text_x = x + ui->row_padding + icon_w;
 
   for (size_t i = dc->first; i < n && i < dc->first + visible; i++) {
     double y = g->list_y + (double)(i - dc->first) * g->row_h;
@@ -261,9 +311,14 @@ static void draw_rows(const struct state* v,
     }
 
     const struct state_entry* e = state_match(v, i);
+    cairo_surface_t* icon = dc->icon_column ? entry_icon(dc, cr, e) : NULL;
+    if (icon != NULL)
+      draw_icon(cr, icon, e->icon, sel ? c->selection_text : c->text,
+                x + ui->row_padding, y + ui->row_padding);
+
     set_text(layout, e->name);
-    pango_layout_set_width(layout,
-                           (int)((cw - 2 * ui->row_padding) * PANGO_SCALE));
+    pango_layout_set_width(
+        layout, (int)((cw - 2 * ui->row_padding - icon_w) * PANGO_SCALE));
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
     size_t off = state_match_offset(v, i);
     if (v->query.len > 0 && off != STR_NPOS) {
@@ -273,7 +328,7 @@ static void draw_rows(const struct state* v,
       pango_attr_list_unref(attrs);
     }
     set_color(cr, sel ? c->selection_text : c->text);
-    show(cr, layout, g, x + ui->row_padding, y);
+    show(cr, layout, g, text_x, y);
   }
 
   if (scrollbar) {

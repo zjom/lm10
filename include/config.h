@@ -49,6 +49,8 @@ struct config_ui {
   int border_radius;
   int selection_radius;
   bool show_counter;  // "matches/entries" at the right of the query row
+  bool icons;         // draw entry icons
+  StrBuf icon_theme;  // freedesktop icon theme to look them up in
   struct config_colors colors;
 };
 
