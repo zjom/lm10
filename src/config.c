@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include "log.h"
 
@@ -280,7 +281,145 @@ static void set_color(struct config_colors* c,
   PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [colors]", STR_ARG(key));
 }
 
-enum section { SECTION_NONE, SECTION_MAIN, SECTION_COLORS };
+static bool parse_action(Str v, enum kb_action* out) {
+  static const struct {
+    const char* name;
+    enum kb_action action;
+  } names[] = {
+      {"cancel", KB_ACTION_CANCEL},
+      {"delete-prev", KB_ACTION_DELETE_PREV},
+      {"delete-prev-word", KB_ACTION_DELETE_PREV_WORD},
+      {"delete-next", KB_ACTION_DELETE_NEXT},
+      {"delete-next-word", KB_ACTION_DELETE_NEXT_WORD},
+      {"delete-line-start", KB_ACTION_DELETE_LINE_START},
+      {"delete-line-end", KB_ACTION_DELETE_LINE_END},
+      {"delete-line", KB_ACTION_DELETE_LINE},
+      {"cursor-left", KB_ACTION_CURSOR_LEFT},
+      {"cursor-right", KB_ACTION_CURSOR_RIGHT},
+      {"cursor-word-left", KB_ACTION_CURSOR_WORD_LEFT},
+      {"cursor-word-right", KB_ACTION_CURSOR_WORD_RIGHT},
+      {"cursor-start", KB_ACTION_CURSOR_START},
+      {"cursor-end", KB_ACTION_CURSOR_END},
+      {"match-exec", KB_ACTION_MATCH_EXEC},
+      {"match-next", KB_ACTION_MATCH_NEXT},
+      {"match-prev", KB_ACTION_MATCH_PREV},
+  };
+  for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
+    if (str_eq_cstr(v, names[i].name)) {
+      *out = names[i].action;
+      return true;
+    }
+  }
+  return false;
+}
+
+/* Mod+...+Keysym, e.g. Control+Shift+n. Mods are case-insensitive; the keysym
+ * is an xkb name, matched exactly first and then ignoring case. The result is
+ * normalized to what the keyboard reports: Shift+n is {SHIFT, N}, and an
+ * uppercase keysym implies Shift. */
+static bool parse_keypress(Str v, struct kb_keypress* out) {
+  static const struct {
+    const char* name;
+    uint32_t mod;
+  } mods[] = {
+      {"control", KB_MOD_CTRL}, {"ctrl", KB_MOD_CTRL},  {"shift", KB_MOD_SHIFT},
+      {"alt", KB_MOD_ALT},      {"mod1", KB_MOD_ALT},   {"super", KB_MOD_SUPER},
+      {"logo", KB_MOD_SUPER},   {"mod4", KB_MOD_SUPER},
+  };
+
+  Str mod_part, sym_part;
+  if (!str_cut_last(v, STR("+"), &mod_part, &sym_part)) {
+    mod_part = STR("");
+    sym_part = v;
+  }
+
+  uint32_t mask = 0;
+  if (mod_part.len > 0) {
+    StrSplit it = str_split(mod_part, STR("+"));
+    Str name;
+    while (str_split_next(&it, &name)) {
+      size_t i = 0;
+      while (i < sizeof mods / sizeof mods[0] &&
+             !str_eq_nocase(name, str_from_cstr(mods[i].name)))
+        i++;
+      if (i == sizeof mods / sizeof mods[0])
+        return false;
+      mask |= mods[i].mod;
+    }
+  }
+
+  /* xkb wants a NUL-terminated name; keysym names are short. */
+  char buf[64];
+  if (sym_part.len == 0 || sym_part.len >= sizeof buf)
+    return false;
+  memcpy(buf, sym_part.ptr, sym_part.len);
+  buf[sym_part.len] = '\0';
+  xkb_keysym_t sym = xkb_keysym_from_name(buf, XKB_KEYSYM_NO_FLAGS);
+  if (sym == XKB_KEY_NoSymbol)
+    sym = xkb_keysym_from_name(buf, XKB_KEYSYM_CASE_INSENSITIVE);
+  if (sym == XKB_KEY_NoSymbol)
+    return false;
+
+  if (xkb_keysym_to_lower(sym) != sym)
+    mask |= KB_MOD_SHIFT;
+  if (mask & KB_MOD_SHIFT) {
+    sym = sym == XKB_KEY_Tab ? XKB_KEY_ISO_Left_Tab : xkb_keysym_to_upper(sym);
+  }
+
+  *out = (struct kb_keypress){.mods = mask, .sym = sym};
+  return true;
+}
+
+/* action = Key [Key ...] replaces every bind of that action, so it drops the
+ * defaults for it; "none" leaves the action unbound. Returns false on
+ * allocation failure. */
+static bool set_key(ConfigBindList* binds,
+                    const struct loc* loc,
+                    Str key,
+                    Str val) {
+  enum kb_action action;
+  if (!parse_action(key, &action)) {
+    PARSE_WARN(loc, "unknown action \"" STR_FMT "\" in [keys]", STR_ARG(key));
+    return true;
+  }
+
+  bool none = str_eq_nocase(val, STR("none"));
+  if (!none) {
+    /* Check every key first so a typo doesn't drop the existing binds. */
+    Str rest = val, field;
+    struct kb_keypress kp;
+    if (val.len == 0) {
+      PARSE_WARN(loc, STR_FMT " needs at least one key, or none", STR_ARG(key));
+      return true;
+    }
+    while (str_next_field(&rest, &field)) {
+      if (!parse_keypress(field, &kp)) {
+        PARSE_WARN(loc, "bad key \"" STR_FMT "\"", STR_ARG(field));
+        return true;
+      }
+    }
+  }
+
+  size_t kept = 0;
+  for (size_t i = 0; i < binds->len; i++) {
+    if (binds->ptr[i].action != action)
+      binds->ptr[kept++] = binds->ptr[i];
+  }
+  LIST_TRUNCATE(binds, kept);
+
+  if (none)
+    return true;
+  Str rest = val, field;
+  while (str_next_field(&rest, &field)) {
+    struct config_bind b = {.action = action};
+    parse_keypress(field, &b.key);
+    if (!LIST_PUSH(binds, b))
+      return false;
+  }
+  return true;
+}
+
+enum section { SECTION_NONE, SECTION_MAIN, SECTION_COLORS, SECTION_KEYS };
 
 /* Returns false on allocation failure. */
 static bool parse(struct config* cfg, const char* path, Str text) {
@@ -305,6 +444,8 @@ static bool parse(struct config* cfg, const char* path, Str text) {
         section = SECTION_MAIN;
       } else if (str_eq_cstr(name, "colors")) {
         section = SECTION_COLORS;
+      } else if (str_eq_cstr(name, "keys")) {
+        section = SECTION_KEYS;
       } else {
         PARSE_WARN(&loc, "unknown section [" STR_FMT "]", STR_ARG(name));
         section = SECTION_NONE;
@@ -332,6 +473,10 @@ static bool parse(struct config* cfg, const char* path, Str text) {
         break;
       case SECTION_COLORS:
         set_color(&cfg->ui.colors, &loc, key, val);
+        break;
+      case SECTION_KEYS:
+        if (!set_key(&cfg->binds, &loc, key, val))
+          return false;
         break;
     }
   }

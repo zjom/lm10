@@ -80,6 +80,8 @@ bool config_default_path(StrBuf* out);
  *   width = 40%
  *   [colors]
  *   background = #1e1e2ef0
+ *   [keys]
+ *   match-next = Down Tab Control+n
  *
  * Values may be wrapped in double quotes to keep surrounding spaces. Bad
  * lines are skipped with a warning. Returns 0, 1 if the file doesn't exist,
