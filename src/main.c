@@ -11,7 +11,8 @@
  * The look and the keys are set in ~/.config/lm10/lm10.ini (or -c PATH); see
  * config.h. A key runs a list of actions, e.g. Control+r =
  * change-prompt(> )+reload(ls ~) swaps the prompt and the entries.
- * -o [SECTION.]KEY=VALUE overrides a single key, e.g. -o colors.text=#ffffff.
+ * Flags override the file for one run: --KEY VALUE for a [main] key,
+ * --color NAME=VALUE,... and --bind KEY=ACTIONS, e.g. --color text=#ffffff.
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...):
  *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-X foot' |
@@ -427,49 +428,86 @@ static const struct wayl_listener wayl_listener = {
 
 /* ---- main ---- */
 
-static void usage(FILE* f, const char* argv0) {
-  fprintf(f,
-          "usage: %s [-c CONFIG] [-o [SECTION.]KEY=VALUE]...\n"
-          "\n"
-          "Reads entries from stdin, one per line:\n"
-          "  [-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]\n"
-          "or, if stdin starts with '{', '[' or a comment, as JSON(C) values,\n"
-          "each an entry object or an array of them:\n"
-          "  {\"name\": NAME, \"icon\": ICON, \"run\": \"print\"|\"exec\"|"
-          "\"detach\",\n"
-          "   \"command\": \"COMMAND ARG...\" | [COMMAND, ARG...]}\n"
-          "\n"
-          "Picking one execs it (-x, \"exec\"), runs it detached (-X,\n"
-          "\"detach\"), or else prints its command line to stdout.\n"
-          "\n"
-          "  -c, --config PATH  config file (default: "
-          "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
-          "  -o, --override [SECTION.]KEY=VALUE\n"
-          "                     set a config key after the file is read;\n"
-          "                     SECTION is main (default), colors or keys,\n"
-          "                     e.g. -o width=40%% -o keys.Escape=cancel\n"
-          "                     -o 'header=Pick one\\nor not'\n"
-          "                     -o 'border-label=\" lm10 \"' "
-          "-o border-label-pos=10:bottom\n"
+/* The [main] keys, each settable with --KEY VALUE. */
+static const char* const main_keys[] = {
+    "font",
+    "prompt",
+    "placeholder",
+    "header",
+    "border-label",
+    "border-label-pos",
+    "width",
+    "lines",
+    "padding",
+    "row-padding",
+    "border-width",
+    "border-radius",
+    "selection-radius",
+    "show-counter",
+    "icons",
+    "icon-theme",
+};
+#define N_MAIN_KEYS (sizeof main_keys / sizeof main_keys[0])
 
-          "  -h, --help         show this help\n"
-          "\n"
-          "A key runs actions joined by '+', some taking an argument:\n"
-          "  -o 'keys.Control+r=change-prompt(> )+reload(ls ~)'\n"
-          "change-prompt(T), change-query(T), change-header(T),\n"
-          "change-border-label(T), reload(CMD) and execute(CMD) join the\n"
-          "built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
-          "{N..M} become the selection's command, name, the query and argv\n"
-          "words, shell-quoted.\n",
-          argv0);
+/* getopt_long values past the chars: --KEY is OPT_MAIN + its index */
+enum { OPT_COLOR = 0x100, OPT_BIND, OPT_MAIN };
+
+/* A config flag as given, applied after the file. */
+struct flag {
+  int opt;
+  const char* arg;
+};
+
+static void usage(FILE* f, const char* argv0) {
+  fprintf(
+      f,
+      "usage: %s [-c CONFIG] [--KEY VALUE]... [--color NAME=VALUE,...]...\n"
+      "       [--bind KEY=ACTIONS]...\n"
+      "\n"
+      "Reads entries from stdin, one per line:\n"
+      "  [-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]\n"
+      "or, if stdin starts with '{', '[' or a comment, as JSON(C) values,\n"
+      "each an entry object or an array of them:\n"
+      "  {\"name\": NAME, \"icon\": ICON, \"run\": \"print\"|\"exec\"|"
+      "\"detach\",\n"
+      "   \"command\": \"COMMAND ARG...\" | [COMMAND, ARG...]}\n"
+      "\n"
+      "Picking one execs it (-x, \"exec\"), runs it detached (-X,\n"
+      "\"detach\"), or else prints its command line to stdout.\n"
+      "\n"
+      "  -c, --config PATH  config file (default: "
+      "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
+      "  -h, --help         show this help\n"
+      "\n"
+      "These override the config file, in order (see lm10.ini):\n"
+      "  --font FONT        --prompt TEXT       --placeholder TEXT\n"
+      "  --header TEXT      --border-label TEXT --border-label-pos N[:SIDE]\n"
+      "  --width N|N%%       --lines N           --padding N\n"
+      "  --row-padding N    --border-width N    --border-radius N\n"
+      "  --selection-radius N                   --show-counter yes|no\n"
+      "  --icons yes|no     --icon-theme NAME\n"
+      "  --color NAME=#rrggbb[aa][,NAME=...]  set [colors] keys\n"
+      "  --bind KEY=ACTION[+ACTION...]        bind a key, or none\n"
+      "e.g. --width 40%% --bind Escape=cancel --color text=#ffffff\n"
+      "     --header 'Pick one\\nor not' --border-label ' lm10 '\n"
+      "     --border-label-pos 10:bottom\n"
+      "\n"
+      "A key runs actions joined by '+', some taking an argument:\n"
+      "  --bind 'Control+r=change-prompt(> )+reload(ls ~)'\n"
+      "change-prompt(T), change-query(T), change-header(T),\n"
+      "change-border-label(T), reload(CMD) and execute(CMD) join the\n"
+      "built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
+      "{N..M} become the selection's command, name, the query and argv\n"
+      "words, shell-quoted.\n",
+      argv0);
 }
 
-/* Loads the built-in config, then the file, then the -o overrides in order.
+/* Loads the built-in config, then the file, then the flags in order.
  * Returns false on a fatal error. */
 static bool load_config(struct config* cfg,
                         const char* path,
-                        char* const* overrides,
-                        size_t n_overrides) {
+                        const struct flag* flags,
+                        size_t n_flags) {
   if (!config_load_defaults(cfg)) {
     LOG_FATAL("failed to load default config");
     return false;
@@ -488,9 +526,17 @@ static bool load_config(struct config* cfg,
   if (!(ret == 0 || (ret == 1 && !explicit_path)))
     return false;
 
-  for (size_t i = 0; i < n_overrides; i++) {
-    if (!config_apply_override(cfg, i + 1, overrides[i])) {
-      LOG_FATAL("-o: allocation failed");
+  for (size_t i = 0; i < n_flags; i++) {
+    const struct flag* fl = &flags[i];
+    bool ok;
+    if (fl->opt == OPT_COLOR)
+      ok = config_set_colors(cfg, fl->arg);
+    else if (fl->opt == OPT_BIND)
+      ok = config_set_bind(cfg, fl->arg);
+    else
+      ok = config_set_main(cfg, main_keys[fl->opt - OPT_MAIN], fl->arg);
+    if (!ok) {
+      LOG_FATAL("flags: allocation failed");
       return false;
     }
   }
@@ -501,42 +547,45 @@ int main(int argc, char** argv) {
   int err = 0;
   bool fdm_ok = false, wayl_ok = false, render_ok = false, input_ok = false;
   const char* config_path = NULL;
-  /* -o arguments, in order; there are fewer than argc of them */
-  char** overrides = calloc((size_t)argc, sizeof(*overrides));
-  size_t n_overrides = 0;
-  if (overrides == NULL) {
+  /* config flags, in order; there are fewer than argc of them */
+  struct flag* flags = calloc((size_t)argc, sizeof(*flags));
+  size_t n_flags = 0;
+  if (flags == NULL) {
     LOG_FATAL("allocation failed");
     return 1;
   }
 
-  static const struct option opts[] = {
+  struct option opts[4 + N_MAIN_KEYS + 1] = {
       {"config", required_argument, NULL, 'c'},
-      {"override", required_argument, NULL, 'o'},
       {"help", no_argument, NULL, 'h'},
-      {0},
+      {"color", required_argument, NULL, OPT_COLOR},
+      {"bind", required_argument, NULL, OPT_BIND},
   };
+  for (size_t i = 0; i < N_MAIN_KEYS; i++)
+    opts[4 + i] = (struct option){main_keys[i], required_argument, NULL,
+                                  OPT_MAIN + (int)i};
   int opt;
-  while ((opt = getopt_long(argc, argv, "c:o:h", opts, NULL)) != -1) {
+  while ((opt = getopt_long(argc, argv, "c:h", opts, NULL)) != -1) {
     switch (opt) {
       case 'c':
         config_path = optarg;
         break;
-      case 'o':
-        overrides[n_overrides++] = optarg;
-        break;
       case 'h':
         usage(stdout, argv[0]);
-        free(overrides);
+        free(flags);
         return 0;
-      default:
+      case '?':
         usage(stderr, argv[0]);
-        free(overrides);
+        free(flags);
         return 1;
+      default:
+        flags[n_flags++] = (struct flag){opt, optarg};
+        break;
     }
   }
   if (optind < argc) {
     usage(stderr, argv[0]);
-    free(overrides);
+    free(flags);
     return 1;
   }
 
@@ -551,9 +600,8 @@ int main(int argc, char** argv) {
   }
   fdm_ok = true;
 
-  bool config_ok =
-      load_config(&app.config, config_path, overrides, n_overrides);
-  free(overrides); /* the overrides were copied into the config */
+  bool config_ok = load_config(&app.config, config_path, flags, n_flags);
+  free(flags); /* the flags were copied into the config */
   if (!config_ok) {
     err = 1;
     goto cleanup;

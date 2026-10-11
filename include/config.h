@@ -106,11 +106,18 @@ bool config_default_path(StrBuf* out);
  * or -1 if it couldn't be read. */
 int config_load_file(struct config* cfg, const char* path);
 
-/* Applies one command-line override, [section.]key=value, on top of what cfg
- * already holds; the section defaults to main, and the value is read as in
- * the file. n numbers the override in warnings. Bad overrides are skipped with
- * a warning. Returns false on allocation failure. */
-bool config_apply_override(struct config* cfg, size_t n, const char* arg);
+/* Command-line flags, applied on top of what cfg already holds; values are read
+ * as in the file, and bad ones are skipped with a warning. Each returns false
+ * on allocation failure. */
+
+/* --KEY VAL sets [main] KEY to VAL, taken as is: not trimmed or unquoted. */
+bool config_set_main(struct config* cfg, const char* key, const char* val);
+
+/* --color NAME=VALUE[,NAME=VALUE...] sets [colors] keys. */
+bool config_set_colors(struct config* cfg, const char* list);
+
+/* --bind KEY=ACTIONS binds a key as a [keys] line does. */
+bool config_set_bind(struct config* cfg, const char* arg);
 
 /* Sets a header: s with each \n turned into a line break. Returns false on
  * allocation failure. */

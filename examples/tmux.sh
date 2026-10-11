@@ -46,9 +46,9 @@ printf -v self %q "$(realpath "$0")"
 # The session is the last argv word: tmux ATTACH -t SESSION is {3}. The
 # border label names the list being shown; the header lists the keys.
 list sessions | "${LM10:-lm10}" \
-  -o 'prompt="⚡ "' \
-  -o 'border-label=" tmux sessions "' \
-  -o 'header=^a sessions  ·  ^x zoxide  ·  ^d kill session' \
-  -o "keys.Control+a=change-prompt(⚡ )+change-border-label( tmux sessions )+reload($self --list sessions)" \
-  -o "keys.Control+x=change-prompt(📁 )+change-border-label( zoxide )+reload($self --list zoxide)" \
-  -o "keys.Control+d=execute(tmux kill-session -t {3})+change-prompt(⚡ )+change-border-label( tmux sessions )+reload($self --list sessions)"
+  --prompt '⚡ ' \
+  --border-label ' tmux sessions ' \
+  --header '^a sessions  ·  ^x zoxide  ·  ^d kill session' \
+  --bind "Control+a=change-prompt(⚡ )+change-border-label( tmux sessions )+reload($self --list sessions)" \
+  --bind "Control+x=change-prompt(📁 )+change-border-label( zoxide )+reload($self --list zoxide)" \
+  --bind "Control+d=execute(tmux kill-session -t {3})+change-prompt(⚡ )+change-border-label( tmux sessions )+reload($self --list sessions)"

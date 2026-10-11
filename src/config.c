@@ -112,8 +112,14 @@ struct loc {
   size_t line;
 };
 
-#define PARSE_WARN(loc, fmt, ...) \
-  LOG_WARN("%s:%zu: " fmt, (loc)->path, (loc)->line, __VA_ARGS__)
+/* line 0 is a command-line flag, which has none */
+#define PARSE_WARN(loc, fmt, ...)                                      \
+  do {                                                                 \
+    if ((loc)->line != 0)                                              \
+      LOG_WARN("%s:%zu: " fmt, (loc)->path, (loc)->line, __VA_ARGS__); \
+    else                                                               \
+      LOG_WARN("%s: " fmt, (loc)->path, __VA_ARGS__);                  \
+  } while (0)
 
 static bool parse_int(Str v, int min, int max, int* out) {
   int64_t n;
@@ -423,18 +429,13 @@ static bool parse_section(Str name, enum section* out) {
   return true;
 }
 
-/* Applies key = val (both trimmed, val unquoted) to section. Returns false on
- * allocation failure. */
-static bool set_value(struct config* cfg,
-                      const struct loc* loc,
-                      enum section section,
-                      Str key,
-                      Str val) {
-  key = str_trim(key);
-  val = str_trim(val);
-  if (val.len >= 2 && val.ptr[0] == '"' && val.ptr[val.len - 1] == '"')
-    val = str_slice(val, 1, val.len - 1);
-
+/* Applies key = val, as given, to section. Returns false on allocation
+ * failure. */
+static bool set_raw(struct config* cfg,
+                    const struct loc* loc,
+                    enum section section,
+                    Str key,
+                    Str val) {
   switch (section) {
     case SECTION_NONE:
       PARSE_WARN(loc, "%s", "key outside of a section");
@@ -448,6 +449,19 @@ static bool set_value(struct config* cfg,
       return set_key(cfg, loc, key, val);
   }
   return true;
+}
+
+/* set_raw with key and val trimmed and val unquoted. */
+static bool set_value(struct config* cfg,
+                      const struct loc* loc,
+                      enum section section,
+                      Str key,
+                      Str val) {
+  key = str_trim(key);
+  val = str_trim(val);
+  if (val.len >= 2 && val.ptr[0] == '"' && val.ptr[val.len - 1] == '"')
+    val = str_slice(val, 1, val.len - 1);
+  return set_raw(cfg, loc, section, key, val);
 }
 
 /* Returns false on allocation failure. */
@@ -487,26 +501,38 @@ static bool parse(struct config* cfg, const char* path, Str text) {
   return true;
 }
 
-bool config_apply_override(struct config* cfg, size_t n, const char* arg) {
-  struct loc loc = {.path = "-o", .line = n};
-  Str lhs, val;
-  if (!str_cut(str_from_cstr(arg), STR("="), &lhs, &val)) {
-    PARSE_WARN(&loc, "%s", "expected [section.]key=value");
+bool config_set_main(struct config* cfg, const char* key, const char* val) {
+  char path[64];
+  snprintf(path, sizeof path, "--%s", key);
+  struct loc loc = {.path = path};
+  return set_raw(cfg, &loc, SECTION_MAIN, str_from_cstr(key),
+                 str_from_cstr(val));
+}
+
+bool config_set_colors(struct config* cfg, const char* list) {
+  struct loc loc = {.path = "--color"};
+  Str rest = str_from_cstr(list), item;
+  for (;;) {
+    bool more = str_cut(rest, STR(","), &item, &rest);
+    Str key, val;
+    if (!str_cut(item, STR("="), &key, &val))
+      PARSE_WARN(&loc, "expected NAME=#rrggbb[aa], got \"" STR_FMT "\"",
+                 STR_ARG(item));
+    else
+      set_value(cfg, &loc, SECTION_COLORS, key, val);
+    if (!more)
+      return true;
+  }
+}
+
+bool config_set_bind(struct config* cfg, const char* arg) {
+  struct loc loc = {.path = "--bind"};
+  Str key, val;
+  if (!str_cut(str_from_cstr(arg), STR("="), &key, &val)) {
+    PARSE_WARN(&loc, "%s", "expected KEY=ACTIONS");
     return true;
   }
-
-  enum section section = SECTION_MAIN;
-  Str name, key;
-  if (str_cut(lhs, STR("."), &name, &key)) {
-    name = str_trim(name);
-    if (!parse_section(name, &section)) {
-      PARSE_WARN(&loc, "unknown section [" STR_FMT "]", STR_ARG(name));
-      return true;
-    }
-  } else {
-    key = lhs;
-  }
-  return set_value(cfg, &loc, section, key, val);
+  return set_value(cfg, &loc, SECTION_KEYS, key, val);
 }
 
 int config_load_file(struct config* cfg, const char* path) {
