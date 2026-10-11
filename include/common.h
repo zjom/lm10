@@ -10,7 +10,9 @@ enum lm_err {
   LM_ERR_MMAP = -5,
   LM_ERR_SHM = -6,
   LM_ERR_CAIRO = -7,
-  LM_ERR_EXEC = -8
+  LM_ERR_EXEC = -8,
+  LM_ERR_POLL = -9,
+  LM_ERR_DISPLAY = -10,
 };
 
 static inline const char* lm_strerror(enum lm_err code) {
@@ -33,6 +35,10 @@ static inline const char* lm_strerror(enum lm_err code) {
       return "cairo error";
     case LM_ERR_EXEC:
       return "exec error";
+    case LM_ERR_POLL:
+      return "event loop error";
+    case LM_ERR_DISPLAY:
+      return "wayland display error";
   }
   return "unknown error";
 }

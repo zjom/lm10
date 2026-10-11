@@ -1,104 +1,127 @@
 #include "fdm.h"
 
-#include <assert.h>
-#include <stdint.h>
-#include <stdio.h>
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/epoll.h>
 #include <unistd.h>
 
-static struct fdmdata* fdm__find(struct fdm* fdm, uint32_t fd) {
-  ARR_FOREACH(struct fdmdata, it, &fdm->fds) {
-    if (it->key == fd) {
-      return it;
-    }
+#include "log.h"
+
+struct fdm_watch {
+  int fd;  // -1 once removed
+  uint32_t flags;
+  fdm_cb cb;
+  void* data;
+};
+
+/* The live watch for fd, or NULL. */
+static struct fdm_watch* find(struct fdm* fdm, int fd) {
+  ARR_FOREACH(struct fdm_watch*, it, &fdm->watches) {
+    if ((*it)->fd == fd)
+      return *it;
   }
   return NULL;
 }
 
-int fdm_init(struct fdm* fdm) {
-  int epfd = epoll_create1(EPOLL_CLOEXEC);
-  if (epfd == -1) {
-    return -1;
+/* Frees the watches removed since the last call. */
+static void sweep(struct fdm* fdm) {
+  for (size_t i = 0; i < fdm->watches.len;) {
+    struct fdm_watch* w = fdm->watches.ptr[i];
+    if (w->fd != -1) {
+      i++;
+      continue;
+    }
+    free(w);
+    LIST_SWAP_REMOVE(&fdm->watches, i);
   }
-  fdm->epfd = epfd;
-  fdm->fds = (FdmDataList)LIST_INIT;
-  return 0;
+}
+
+int fdm_init(struct fdm* fdm) {
+  *fdm = (struct fdm){.epfd = -1, .watches = LIST_INIT};
+  fdm->epfd = epoll_create1(EPOLL_CLOEXEC);
+  return fdm->epfd == -1 ? -1 : 0;
 }
 
 void fdm_destroy(struct fdm* fdm) {
-  close(fdm->epfd);
-  ARR_FOREACH(struct fdmdata, it, &fdm->fds) {
-    epoll_ctl(fdm->epfd, EPOLL_CTL_DEL, it->key, NULL);
-    if (it->value.flags & FDM_AUTOCLOSE) {
-      close(it->key);
-    }
+  ARR_FOREACH(struct fdm_watch*, it, &fdm->watches) {
+    if ((*it)->fd != -1 && ((*it)->flags & FDM_AUTOCLOSE))
+      close((*it)->fd);
+    free(*it);
   }
-  LIST_FREE(&fdm->fds);
+  LIST_FREE(&fdm->watches);
+  if (fdm->epfd != -1)
+    close(fdm->epfd);
+  *fdm = (struct fdm){.epfd = -1};
 }
 
 int fdm_add(struct fdm* fdm,
-            uint32_t fd,
+            int fd,
             uint32_t events,
+            fdm_cb cb,
             void* data,
-            int32_t (*cb)(struct fdm*, void*),
             uint32_t flags) {
-  struct fdmdata fdmdata = {.key = fd,
-                            .value = {.data = data,
-                                      .cb = cb,
-                                      .epev = {.events = events, .data.fd = fd},
-                                      .flags = flags}};
-
-  struct fdmdata* item = fdm__find(fdm, fd);
-  int op = item != NULL ? EPOLL_CTL_MOD : EPOLL_CTL_ADD;
-
-  if (epoll_ctl(fdm->epfd, op, fd, &fdmdata.value.epev) == -1) {
-    return -1;
+  struct fdm_watch* w = find(fdm, fd);
+  if (w != NULL) {
+    struct epoll_event ev = {.events = events, .data.ptr = w};
+    if (epoll_ctl(fdm->epfd, EPOLL_CTL_MOD, fd, &ev) == -1)
+      return -1;
+    *w = (struct fdm_watch){.fd = fd, .flags = flags, .cb = cb, .data = data};
+    return 0;
   }
 
-  if (item != NULL) {
-    *item = fdmdata;
-  } else if (!LIST_PUSH(&fdm->fds, fdmdata)) {
-    epoll_ctl(fdm->epfd, EPOLL_CTL_DEL, fd, NULL);
+  w = malloc(sizeof *w);
+  if (w == NULL)
+    return -1;
+  *w = (struct fdm_watch){.fd = fd, .flags = flags, .cb = cb, .data = data};
+  if (!LIST_PUSH(&fdm->watches, w)) {
+    free(w);
+    errno = ENOMEM;
+    return -1;
+  }
+  struct epoll_event ev = {.events = events, .data.ptr = w};
+  if (epoll_ctl(fdm->epfd, EPOLL_CTL_ADD, fd, &ev) == -1) {
+    int err = errno;
+    LIST_POP(&fdm->watches);
+    free(w);
+    errno = err;
     return -1;
   }
   return 0;
 }
 
-void fdm_remove(struct fdm* fdm, uint32_t fd) {
-  struct fdmdata* item = fdm__find(fdm, fd);
-  if (item == NULL) {
+void fdm_remove(struct fdm* fdm, int fd) {
+  struct fdm_watch* w = find(fdm, fd);
+  if (w == NULL)
     return;
-  }
 
   epoll_ctl(fdm->epfd, EPOLL_CTL_DEL, fd, NULL);
-
-  if (item->value.flags & FDM_AUTOCLOSE) {
+  if (w->flags & FDM_AUTOCLOSE)
     close(fd);
-  }
-  LIST_SWAP_REMOVE(&fdm->fds, (size_t)(item - fdm->fds.ptr));
+  /* Events for it may still be pending in the batch being dispatched. */
+  w->fd = -1;
+  if (!fdm->dispatching)
+    sweep(fdm);
 }
 
-int fdm_wait(struct fdm* fdm) {
-  uint32_t MAX_EVENTS = 1024;
-  struct epoll_event epoll_events[MAX_EVENTS];
-  int32_t event_count;
-  int32_t TIMEOUT = 5000;
-
-  event_count = epoll_wait(fdm->epfd, epoll_events, MAX_EVENTS, TIMEOUT);
-  if (event_count == -1) {
-    return -1;
+enum lm_err fdm_wait(struct fdm* fdm) {
+  struct epoll_event events[64];
+  int n = epoll_wait(fdm->epfd, events, sizeof events / sizeof events[0], -1);
+  if (n == -1) {
+    if (errno == EINTR)
+      return LM_OK;
+    LOG_ERROR("epoll_wait failed: %s", strerror(errno));
+    return LM_ERR_POLL;
   }
 
-  for (int i = 0; i < event_count; ++i) {
-    struct fdmdata* item = fdm__find(fdm, epoll_events[i].data.fd);
-    if (item == NULL) {
-      fprintf(stderr, "warning: unknown fd received from epoll\n");
-      continue;
-    }
-
-    if (item->value.cb(fdm, item->value.data) != 0) {
-      return -1;
-    }
+  enum lm_err err = LM_OK;
+  fdm->dispatching = true;
+  for (int i = 0; i < n && err == LM_OK; i++) {
+    struct fdm_watch* w = events[i].data.ptr;
+    if (w->fd != -1)
+      err = w->cb(fdm, w->data);
   }
-  return 0;
+  fdm->dispatching = false;
+  sweep(fdm);
+  return err;
 }

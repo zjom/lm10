@@ -643,22 +643,20 @@ int main(int argc, char** argv) {
   unsetenv("DESKTOP_STARTUP_ID");
 
   while (app.running) {
-    err = wayl_prepare(&app.wayl);
-    if (err != 0)
+    if (wayl_prepare(&app.wayl) != LM_OK) {
+      err = 1;
       goto cleanup;
+    }
 
     if (!app.running) { /* a dispatched event may have asked us to quit */
       wayl_finish(&app.wayl);
       break;
     }
 
-    int wait_ret = fdm_wait(&app.fdm);
-    int wait_errno = errno;
+    enum lm_err wait_err = fdm_wait(&app.fdm);
     wayl_finish(&app.wayl);
-
-    if (wait_ret != 0) {
-      LOG_ERROR("fdm error: %s", wait_errno ? strerror(wait_errno) : "");
-      err = wait_errno ? wait_errno : 1;
+    if (wait_err != LM_OK) { /* already logged */
+      err = 1;
       goto cleanup;
     }
 

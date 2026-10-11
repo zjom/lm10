@@ -227,7 +227,7 @@ static void repeat_stop(struct seat* seat) {
     LOG_WARN("failed to disarm repeat timer: %s", strerror(errno));
 }
 
-static int32_t handle_key_repeat_ready(struct fdm* fdm, void* data) {
+static enum lm_err handle_key_repeat_ready(struct fdm* fdm, void* data) {
   (void)fdm;
   struct seat* seat = data;
   uint64_t expcount = 0;
@@ -236,15 +236,15 @@ static int32_t handle_key_repeat_ready(struct fdm* fdm, void* data) {
   if (n != sizeof expcount) {
     if (n == -1 && errno != EAGAIN)
       LOG_WARN("failed to read repeat timer: %s", strerror(errno));
-    return 0;
+    return LM_OK;
   }
 
   if (seat->kbd.repeat.key == 0 || seat->kbd.xkb_state == NULL)
-    return 0;
+    return LM_OK;
 
   for (uint64_t i = 0; i < expcount; i++)
     seat_emit_key(seat, seat->kbd.repeat.key);
-  return 0;
+  return LM_OK;
 }
 
 static bool repeat_ensure_fd(struct seat* seat) {
@@ -257,7 +257,7 @@ static bool repeat_ensure_fd(struct seat* seat) {
     LOG_WARN("failed to create timerfd: %s", strerror(errno));
     return false;
   }
-  if (fdm_add(seat->wayl->fdm, fd, EPOLLIN, seat, handle_key_repeat_ready,
+  if (fdm_add(seat->wayl->fdm, fd, EPOLLIN, handle_key_repeat_ready, seat,
               FDM_AUTOCLOSE) != 0) {
     LOG_WARN("failed to add timerfd to fdm");
     close(fd);
@@ -571,7 +571,8 @@ static const struct wl_registry_listener registry_listener = {
 
 /* ---- display fd ---- */
 
-static int report_display_error(struct wl_display* display) {
+/* Logs why the display failed. Returns LM_ERR_DISPLAY. */
+static enum lm_err report_display_error(struct wl_display* display) {
   int err = wl_display_get_error(display);
 
   if (err == EPROTO) {
@@ -583,15 +584,15 @@ static int report_display_error(struct wl_display* display) {
   } else {
     LOG_FATAL("Fatal Socket Error: %s", strerror(err ? err : errno));
   }
-  return err ? err : 1;
+  return LM_ERR_DISPLAY;
 }
 
-static int32_t handle_display_events(struct fdm* fdm, void* data) {
+static enum lm_err handle_display_events(struct fdm* fdm, void* data) {
   (void)fdm;
   struct wayl* w = data;
 
   if (!w->read_prepared)
-    return 0; /* not a reader right now; main loop will prepare again */
+    return LM_OK; /* not a reader right now; main loop will prepare again */
 
   w->read_prepared = false; /* consumed by wayl_finish */
   if (wl_display_read_events(w->display) == -1)
@@ -600,7 +601,7 @@ static int32_t handle_display_events(struct fdm* fdm, void* data) {
   if (wl_display_dispatch_pending(w->display) == -1)
     return report_display_error(w->display);
 
-  return 0;
+  return LM_OK;
 }
 
 /* ---- public ---- */
@@ -704,8 +705,8 @@ int wayl_init(struct wayl* w,
   wl_surface_commit(w->surface); /* empty commit -> triggers first configure */
 
   int fd = wl_display_get_fd(w->display);
-  if (fdm_add(fdm, fd, EPOLLIN | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP, w,
-              handle_display_events, 0) != 0) {
+  if (fdm_add(fdm, fd, EPOLLIN | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP,
+              handle_display_events, w, 0) != 0) {
     LOG_FATAL("failed to add display fd to fdm: %s",
               errno ? strerror(errno) : "");
     return -1;
@@ -758,7 +759,7 @@ void wayl_destroy(struct wayl* w) {
   *w = (struct wayl){.display_fd = -1};
 }
 
-int wayl_prepare(struct wayl* w) {
+enum lm_err wayl_prepare(struct wayl* w) {
   /* Drain already-queued events until we can become a reader.
    * A failed prepare_read must NOT be paired with read/cancel. */
   while (wl_display_prepare_read(w->display) != 0) {
@@ -771,7 +772,7 @@ int wayl_prepare(struct wayl* w) {
     wayl_finish(w);
     return report_display_error(w->display);
   }
-  return 0;
+  return LM_OK;
 }
 
 void wayl_finish(struct wayl* w) {

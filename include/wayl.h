@@ -111,9 +111,9 @@ void wayl_destroy(struct wayl* w);
 
 /* Main-loop halves around fdm_wait(): wayl_prepare dispatches queued events
  * until it can become a reader, then flushes; wayl_finish cancels the read if
- * the display fd didn't fire. wayl_prepare returns 0, or non-zero on a fatal
- * display error (already logged). */
-int wayl_prepare(struct wayl* w);
+ * the display fd didn't fire. wayl_prepare returns LM_OK, or LM_ERR_DISPLAY
+ * on a fatal display error (already logged). */
+enum lm_err wayl_prepare(struct wayl* w);
 void wayl_finish(struct wayl* w);
 
 /* Synchronously grab a token from the compositor.

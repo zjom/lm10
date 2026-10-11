@@ -15,7 +15,7 @@
 static void stop(struct input* in, bool at_eof) {
   if (in->fd == -1)
     return;
-  fdm_remove(in->fdm, (uint32_t)in->fd);
+  fdm_remove(in->fdm, in->fd);
   if (in->pid > 0) {
     close(in->fd);
     if (!at_eof)
@@ -46,7 +46,7 @@ static bool read_some(struct input* in, bool* pushed) {
   return false;
 }
 
-static int32_t on_readable(struct fdm* fdm, void* data) {
+static enum lm_err on_readable(struct fdm* fdm, void* data) {
   (void)fdm;
   struct input* in = data;
   bool pushed = false;
@@ -56,7 +56,7 @@ static int32_t on_readable(struct fdm* fdm, void* data) {
     stop(in, true);
   if (pushed && in->on_change)
     in->on_change(in->data);
-  return 0;
+  return LM_OK;
 }
 
 int input_init(struct input* in,
@@ -74,7 +74,7 @@ int input_init(struct input* in,
   };
   entry_parser_init(&in->parser, "stdin", state);
 
-  if (fdm_add(fdm, (uint32_t)fd, EPOLLIN, in, on_readable, 0) == 0)
+  if (fdm_add(fdm, fd, EPOLLIN, on_readable, in, 0) == 0)
     return 0;
 
   if (errno != EPERM) {
@@ -126,6 +126,8 @@ int input_init_command(struct input* in,
   }
   setpgid(pid, pid); /* as the child does, whichever runs first */
   close(fds[1]);
+  /* Only our end: reads must never block the event loop. */
+  fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL) | O_NONBLOCK);
 
   *in = (struct input){
       .fdm = fdm,
@@ -135,7 +137,7 @@ int input_init_command(struct input* in,
       .data = data,
   };
   entry_parser_init(&in->parser, "reload", state);
-  if (fdm_add(fdm, (uint32_t)fds[0], EPOLLIN, in, on_readable, 0) != 0) {
+  if (fdm_add(fdm, fds[0], EPOLLIN, on_readable, in, 0) != 0) {
     LOG_ERROR("reload: failed to watch output: %s", strerror(errno));
     close(fds[0]);
     kill(-pid, SIGTERM);
