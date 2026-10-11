@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "log.h"
+#include "util.h"
 
 struct fdm_watch {
   int fd;  // -1 once removed
@@ -70,15 +71,9 @@ int fdm_add(struct fdm* fdm,
     return 0;
   }
 
-  w = malloc(sizeof *w);
-  if (w == NULL)
-    return -1;
+  w = xmalloc(sizeof *w);
   *w = (struct fdm_watch){.fd = fd, .flags = flags, .cb = cb, .data = data};
-  if (!LIST_PUSH(&fdm->watches, w)) {
-    free(w);
-    errno = ENOMEM;
-    return -1;
-  }
+  LIST_PUSH(&fdm->watches, w);
   struct epoll_event ev = {.events = events, .data.ptr = w};
   if (epoll_ctl(fdm->epfd, EPOLL_CTL_ADD, fd, &ev) == -1) {
     int err = errno;

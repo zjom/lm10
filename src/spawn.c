@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "log.h"
+#include "util.h"
 
 /* How long an owned child gets between SIGTERM and SIGKILL. */
 #define TERMINATE_GRACE_S 2
@@ -207,12 +208,8 @@ bool procs_watch(struct procs* ps, pid_t pid, bool owned) {
     LOG_WARN("can't watch process %d: %s", (int)pid, strerror(errno));
     return false;
   }
-  struct proc* p = malloc(sizeof *p);
-  if (p == NULL || !LIST_PUSH(&ps->list, p)) {
-    free(p);
-    close(pidfd);
-    return false;
-  }
+  struct proc* p = xmalloc(sizeof *p);
+  LIST_PUSH(&ps->list, p);
   *p = (struct proc){
       .ps = ps,
       .pid = pid,

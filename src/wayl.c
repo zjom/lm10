@@ -15,6 +15,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "log.h"
+#include "util.h"
 #include "ztd_arr.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -526,12 +527,8 @@ static void seat_add(struct wayl* w,
                      struct wl_registry* reg,
                      uint32_t name,
                      uint32_t version) {
-  struct seat* s = malloc(sizeof *s);
-  if (s == NULL || !LIST_PUSH(&w->seats, s)) {
-    LOG_WARN("allocation failed; ignoring a seat");
-    free(s);
-    return;
-  }
+  struct seat* s = xmalloc(sizeof *s);
+  LIST_PUSH(&w->seats, s);
   *s = (struct seat){.wayl = w, .wl_name = name, .repeat = {.fd = -1}};
   s->wl_seat = wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 5));
   wl_seat_add_listener(s->wl_seat, &seat_listener, s);
@@ -640,11 +637,7 @@ struct wayl* wayl_new(struct fdm* fdm,
                       const struct wayl_listener* listener,
                       void* data,
                       const char* namespace) {
-  struct wayl* w = malloc(sizeof *w);
-  if (w == NULL) {
-    LOG_FATAL("allocation failed");
-    return NULL;
-  }
+  struct wayl* w = xmalloc(sizeof *w);
   *w = (struct wayl){
       .seats = LIST_INIT,
       .fdm = fdm,
