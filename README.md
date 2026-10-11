@@ -15,6 +15,30 @@ lm10 --help
 see [examples/lm10.ini](examples/lm10.ini) for default configuration options.
 all configuration options are overridable via cli flags.
 
+#### home manager
+
+the flake exports a home manager module as `homeModules.default`:
+
+```nix
+{
+  imports = [ lm10.homeModules.default ];
+
+  programs.lm10 = {
+    enable = true;
+    settings = {
+      main = {
+        prompt = "❯ ";
+        width = "40%";
+        match = "fuzzy";
+        show-counter = false;
+      };
+      colors.background = "#141415f2";
+      keys."Control+j" = "match-next";
+    };
+  };
+}
+```
+
 ### examples
 
 see [examples](./examples/) for more usage examples

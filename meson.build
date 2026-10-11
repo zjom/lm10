@@ -1,7 +1,7 @@
 project(
   'lm10',
   'c',
-  version: '0.1.0',
+  version: files('VERSION'),
   license: 'MIT',
   meson_version: '>=0.58.0',
   default_options: [
