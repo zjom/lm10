@@ -21,7 +21,7 @@ struct render {
   int width, height;  // target size in surface-local (logical) pixels
   uint32_t scale120;  // buffer pixels per logical pixel, in 120ths
   bool dirty;  // something besides the state changed since the last commit
-  const struct state* state;
+  struct state* state;  // sorted before it is drawn
   uint64_t drawn_gen;  // state->gen when it was last drawn
   struct draw_ctx dctx;
   enum lm_err err;  // sticky; checked by the main loop
@@ -31,7 +31,7 @@ struct render {
 int render_init(struct render* r,
                 struct wl_shm* shm,
                 struct wl_surface* surface,
-                const struct state* state,
+                struct state* state,
                 const struct config_ui* ui);
 void render_destroy(struct render* r);
 

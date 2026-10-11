@@ -51,8 +51,10 @@ struct state {
    * ignoring case, as a substring, or with fuzzy as a subsequence. */
   CodepointList needle;  // heap-backed
   bool fuzzy;
-  /* In entry order, or with fuzzy the best match first. Heap-backed. */
+  /* In entry order, or with fuzzy the best match first once sorted.
+   * Heap-backed. */
   MatchList matches;
+  size_t sorted;  // with fuzzy, matches before this one are ranked
   size_t selected;  // index into matches
   /* Texts drawn around the query; actions can change them. Heap-backed. */
   StrBuf prompt;
@@ -107,6 +109,13 @@ bool state_set_border_label(struct state* state, Str text);
  * rather than as a substring in entry order. */
 void state_set_fuzzy(struct state* state, bool fuzzy);
 
+/* Puts fuzzy matches of entries pushed since the last query change in
+ * their place by score. Pushing only appends them, so a stream of entries
+ * isn't ranked one insert at a time; call this before reading matches in
+ * order. */
+void state_sort(struct state* state);
+
+/* These sort first, so the selection moves through the ranked matches. */
 void state_select_next(struct state* state);
 void state_select_prev(struct state* state);
 /* The i-th match. i must be < state->matches.len. */

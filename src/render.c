@@ -64,6 +64,7 @@ static int try_present(struct render* r) {
   /* Draw in logical units; cairo and pango render at buffer resolution. */
   cairo_t* cr = cairo_create(f->cs);
   cairo_scale(cr, r->scale120 / 120.0, r->scale120 / 120.0);
+  state_sort(r->state);
   draw(r->state, &r->dctx, cr, r->width, r->height);
   cairo_destroy(cr);
   cairo_surface_flush(f->cs);
@@ -88,7 +89,7 @@ static int try_present(struct render* r) {
 int render_init(struct render* r,
                 struct wl_shm* shm,
                 struct wl_surface* surface,
-                const struct state* state,
+                struct state* state,
                 const struct config_ui* ui) {
   *r = (struct render){
       .surface = surface,

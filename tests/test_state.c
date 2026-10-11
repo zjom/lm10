@@ -174,11 +174,13 @@ static void test_fuzzy(void) {
   CHECK(state_query_insert(&st, STR("r")));
   check_matches(&st, "firefox browser|fabric|foo bar|FooBar");
 
-  /* Entries arriving later go in by score; the selection stays put. */
+  /* Entries arriving later go in by score once sorted; the selection stays
+   * put. */
   state_select_next(&st);
   push(&st, "f b r");
   push(&st, "zzfzbzr");
   CHECK(st.selected == 1);
+  state_sort(&st);
   check_matches(&st, "f b r|firefox browser|fabric|foo bar|FooBar|zzfzbzr");
 
   /* Back to substrings, in entry order. */

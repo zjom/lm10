@@ -6,6 +6,8 @@
 
 #include <glib.h>
 
+#include "util.h"
+
 void state_init(struct state* state) {
   *state = (struct state){
       .arena = ARENA_INIT,
@@ -254,30 +256,40 @@ static void refilter(struct state* state, bool narrowing) {
       state->matches.ptr[kept++] = m;
   }
   state->matches.len = kept;
-  if (state->fuzzy && state->needle.len > 0)
-    qsort(state->matches.ptr, kept, sizeof *state->matches.ptr, compare_match);
+  state->sorted = 0;
+  state_sort(state);
 }
 
-/* Adds a new entry (the last one) to the matches if it matches, in its
- * place by score. The selection stays where it is. */
+/* Adds a new entry (the last one) to the matches if it matches, at the
+ * end: state_sort ranks it. The selection stays where it is. */
 static void add_match(struct state* state, size_t entry) {
   int32_t score;
   if (!matches(state, entry, &score))
     return;
-  size_t at = state->matches.len;
-  if (state->fuzzy && state->needle.len > 0) {
-    /* After every score at least as good: ties keep entry order. */
-    size_t lo = 0, hi = state->matches.len;
-    while (lo < hi) {
-      size_t mid = lo + (hi - lo) / 2;
-      if (state->matches.ptr[mid].score >= score)
-        lo = mid + 1;
-      else
-        hi = mid;
-    }
-    at = lo;
+  LIST_PUSH(&state->matches, ((struct state_match){entry, score}));
+}
+
+void state_sort(struct state* state) {
+  struct state_match* m = state->matches.ptr;
+  size_t len = state->matches.len, i = state->sorted;
+  state->sorted = len;
+  if (!state->fuzzy || state->needle.len == 0 || i == len)
+    return;
+  /* Sort the new ones, then merge them in from the back, so a stream of
+   * entries costs one pass over the ranked ones per sort. */
+  size_t n = len - i;
+  qsort(m + i, n, sizeof *m, compare_match);
+  if (i == 0)
+    return;
+  struct state_match* tail = xmalloc(n * sizeof *tail);
+  memcpy(tail, m + i, n * sizeof *tail);
+  for (size_t k = len; n > 0;) {
+    if (i > 0 && compare_match(&m[i - 1], &tail[n - 1]) > 0)
+      m[--k] = m[--i];
+    else
+      m[--k] = tail[--n];
   }
-  LIST_INSERT(&state->matches, at, ((struct state_match){entry, score}));
+  free(tail);
 }
 
 void state_set_fuzzy(struct state* state, bool fuzzy) {
@@ -363,6 +375,7 @@ void state_clear_entries(struct state* state) {
   arena_reset(&state->arena);
   state->entries = (StateEntryList)LIST_INIT_ARENA(&state->arena);
   LIST_CLEAR(&state->matches);
+  state->sorted = 0;
   state->selected = 0;
   state->gen++;
 }
@@ -492,6 +505,7 @@ bool state_set_border_label(struct state* state, Str text) {
 /* ---- selection ---- */
 
 void state_select_next(struct state* state) {
+  state_sort(state);
   size_t n = state->matches.len;
   if (n == 0)
     return;
@@ -500,6 +514,7 @@ void state_select_next(struct state* state) {
 }
 
 void state_select_prev(struct state* state) {
+  state_sort(state);
   size_t n = state->matches.len;
   if (n == 0)
     return;
