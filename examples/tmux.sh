@@ -43,9 +43,12 @@ if [[ ${1:-} == --list ]]; then
 fi
 
 printf -v self %q "$(realpath "$0")"
-# The session is the last argv word: tmux ATTACH -t SESSION is {3}.
+# The session is the last argv word: tmux ATTACH -t SESSION is {3}. The
+# border label names the list being shown; the header lists the keys.
 list sessions | "${LM10:-lm10}" \
   -o 'prompt="⚡ "' \
-  -o "keys.Control+a=change-prompt(⚡ )+reload($self --list sessions)" \
-  -o "keys.Control+x=change-prompt(📁 )+reload($self --list zoxide)" \
-  -o "keys.Control+d=execute(tmux kill-session -t {3})+change-prompt(⚡ )+reload($self --list sessions)"
+  -o 'border-label=" tmux sessions "' \
+  -o 'header=^a sessions  ·  ^x zoxide  ·  ^d kill session' \
+  -o "keys.Control+a=change-prompt(⚡ )+change-border-label( tmux sessions )+reload($self --list sessions)" \
+  -o "keys.Control+x=change-prompt(📁 )+change-border-label( zoxide )+reload($self --list zoxide)" \
+  -o "keys.Control+d=execute(tmux kill-session -t {3})+change-prompt(⚡ )+change-border-label( tmux sessions )+reload($self --list sessions)"

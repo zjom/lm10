@@ -33,6 +33,8 @@ enum action_kind {
   /* These take an argument. */
   ACTION_CHANGE_PROMPT,
   ACTION_CHANGE_QUERY,
+  ACTION_CHANGE_HEADER,  // \n in arg breaks lines, as in the config
+  ACTION_CHANGE_BORDER_LABEL,
   ACTION_RELOAD,   // sh -c arg; its output replaces the entries
   ACTION_EXECUTE,  // sh -c arg, waited for
 };

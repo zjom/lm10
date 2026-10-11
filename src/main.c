@@ -372,6 +372,13 @@ static bool run_action(struct app* app, const struct action* a) {
     case ACTION_CHANGE_QUERY:
       ok = state_query_set(st, a->arg);
       break;
+    case ACTION_CHANGE_HEADER:
+      ok = config_set_header(&app->config.ui.header, a->arg);
+      break;
+    case ACTION_CHANGE_BORDER_LABEL:
+      sb_clear(&app->config.ui.border_label);
+      ok = sb_append(&app->config.ui.border_label, a->arg);
+      break;
     case ACTION_RELOAD:
     case ACTION_EXECUTE: {
       StrBuf cmd = STRBUF_INIT;
@@ -441,12 +448,17 @@ static void usage(FILE* f, const char* argv0) {
           "                     set a config key after the file is read;\n"
           "                     SECTION is main (default), colors or keys,\n"
           "                     e.g. -o width=40%% -o keys.Escape=cancel\n"
+          "                     -o 'header=Pick one\\nor not'\n"
+          "                     -o 'border-label=\" lm10 \"' "
+          "-o border-label-pos=10:bottom\n"
 
-          "  -h, --help         show this help\n"          "\n"
+          "  -h, --help         show this help\n"
+          "\n"
           "A key runs actions joined by '+', some taking an argument:\n"
           "  -o 'keys.Control+r=change-prompt(> )+reload(ls ~)'\n"
-          "change-prompt(T), change-query(T), reload(CMD) and execute(CMD)\n"
-          "join the built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
+          "change-prompt(T), change-query(T), change-header(T),\n"
+          "change-border-label(T), reload(CMD) and execute(CMD) join the\n"
+          "built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
           "{N..M} become the selection's command, name, the query and argv\n"
           "words, shell-quoted.\n",
           argv0);

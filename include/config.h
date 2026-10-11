@@ -37,6 +37,8 @@ struct config_colors {
   struct config_color cursor;
   struct config_color counter;
   struct config_color separator;
+  struct config_color header;
+  struct config_color border_label;
 };
 
 /* Sizes are in logical pixels. */
@@ -52,9 +54,14 @@ struct config_ui {
   int border_width;
   int border_radius;
   int selection_radius;
-  bool show_counter;  // "matches/entries" at the right of the query row
-  bool icons;         // draw entry icons
-  StrBuf icon_theme;  // freedesktop icon theme to look them up in
+  bool show_counter;     // "matches/entries" at the right of the query row
+  bool icons;            // draw entry icons
+  StrBuf icon_theme;     // freedesktop icon theme to look them up in
+  StrBuf header;         // lines between the query and the rows; may be empty
+  StrBuf border_label;   // drawn in a gap in the border; may be empty
+  int border_label_pos;  // 0 centers it, N > 0 puts it N pixels from the left
+                         //   edge, N < 0 -N pixels from the right one
+  bool border_label_bottom;  // on the bottom border instead of the top
   struct config_colors colors;
 };
 
@@ -104,5 +111,9 @@ int config_load_file(struct config* cfg, const char* path);
  * the file. n numbers the override in warnings. Bad overrides are skipped with
  * a warning. Returns false on allocation failure. */
 bool config_apply_override(struct config* cfg, size_t n, const char* arg);
+
+/* Sets a header: s with each \n turned into a line break. Returns false on
+ * allocation failure. */
+bool config_set_header(StrBuf* dst, Str s);
 
 #endif  // !LM_CONFIG_H

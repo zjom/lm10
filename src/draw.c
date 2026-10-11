@@ -51,28 +51,51 @@ void draw_ctx_destroy(struct draw_ctx* dc) {
 
 /* Everything is laid out from the panel edges inwards:
  *
- *   inset | query row | gap | separator | gap | rows... | inset
+ *   inset | query row | gap | separator | gap | header | rows... | inset
+ *
+ * A border label sits centered on the top or bottom border line, so the panel
+ * is moved in from that surface edge far enough for it to fit.
  */
 struct geom {
   double inset;  // border + padding
   double row_h;
-  double query_y, sep_y, list_y;
+  double top, bottom;  // space between the panel and the surface edges
+  double query_y, sep_y, header_y, list_y;
 };
+
+/* Lines in the header, 0 if there is none. */
+static size_t header_lines(const struct config_ui* ui) {
+  if (ui->header.len == 0)
+    return 0;
+  size_t n = 1;
+  for (size_t i = 0; i < ui->header.len; i++)
+    n += ui->header.ptr[i] == '\n';
+  return n;
+}
 
 static struct geom geometry(const struct draw_ctx* dc) {
   const struct config_ui* ui = dc->ui;
-  struct geom g;
+  struct geom g = {0};
+  if (ui->border_label.len > 0) {
+    double out = ceil(dc->line_h / 2.0 - ui->border_width / 2.0);
+    if (out > 0)
+      *(ui->border_label_bottom ? &g.bottom : &g.top) = out;
+  }
+  size_t lines = header_lines(ui);
   g.inset = ui->border_width + ui->padding;
   g.row_h = dc->line_h + 2.0 * ui->row_padding;
-  g.query_y = g.inset;
+  g.query_y = g.top + g.inset;
   g.sep_y = g.query_y + g.row_h + ui->padding / 2;
-  g.list_y = g.query_y + g.row_h + ui->padding;
+  g.header_y = g.query_y + g.row_h + ui->padding;
+  g.list_y = g.header_y;
+  if (lines > 0)
+    g.list_y += (double)lines * dc->line_h + 2.0 * ui->row_padding;
   return g;
 }
 
 int draw_height(const struct draw_ctx* dc) {
   struct geom g = geometry(dc);
-  return (int)ceil(g.list_y + dc->ui->lines * g.row_h + g.inset);
+  return (int)ceil(g.list_y + dc->ui->lines * g.row_h + g.inset + g.bottom);
 }
 
 /* ---- helpers ---- */
@@ -181,18 +204,106 @@ static void draw_icon(cairo_t* cr,
 
 /* ---- parts ---- */
 
-static void draw_panel(cairo_t* cr, const struct config_ui* ui, int w, int h) {
+/* Where the border label goes, in a gap cut out of the border. */
+struct label_box {
+  double x, y, w, h;
+};
+
+/* Lays the border label out and places it, or returns false if there is
+ * none. The label stays clear of the rounded corners, ellipsized if it
+ * doesn't fit between them. */
+static bool place_label(const struct config_ui* ui,
+                        const struct geom* g,
+                        PangoLayout* layout,
+                        int w,
+                        int h,
+                        struct label_box* box) {
+  if (ui->border_label.len == 0)
+    return false;
   double bw = ui->border_width;
-  rounded_rect(cr, bw / 2, bw / 2, w - bw, h - bw, ui->border_radius - bw / 2);
+  double margin = ui->border_radius > bw ? ui->border_radius : bw;
+  double room = w - 2 * margin;
+  if (room <= 0)
+    return false;
+
+  set_text(layout, sb_str(&ui->border_label));
+  pango_layout_set_width(layout, (int)(room * PANGO_SCALE));
+  pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+  int tw, th;
+  pango_layout_get_pixel_size(layout, &tw, &th);
+
+  int pos = ui->border_label_pos;
+  double x = pos == 0 ? (w - tw) / 2.0 : pos > 0 ? pos : w + pos - tw;
+  if (x > w - margin - tw)
+    x = w - margin - tw;
+  if (x < margin)
+    x = margin;
+  double line_y =
+      ui->border_label_bottom ? h - g->bottom - bw / 2 : g->top + bw / 2;
+  *box = (struct label_box){x, line_y - th / 2.0, tw, th};
+  return true;
+}
+
+static void draw_panel(cairo_t* cr,
+                       const struct config_ui* ui,
+                       const struct geom* g,
+                       const struct label_box* label,
+                       int w,
+                       int h) {
+  double bw = ui->border_width;
+  double ph = h - g->top - g->bottom;
+  rounded_rect(cr, bw / 2, g->top + bw / 2, w - bw, ph - bw,
+               ui->border_radius - bw / 2);
   set_color(cr, ui->colors.background);
-  if (bw > 0) {
-    cairo_fill_preserve(cr);
-    set_color(cr, ui->colors.border);
-    cairo_set_line_width(cr, bw);
-    cairo_stroke(cr);
-  } else {
+  if (bw <= 0) {
     cairo_fill(cr);
+    return;
   }
+  cairo_fill_preserve(cr);
+
+  cairo_save(cr);
+  if (label != NULL) {
+    /* Everything but the label's box. */
+    cairo_new_path(cr);
+    cairo_rectangle(cr, 0, 0, w, h);
+    cairo_rectangle(cr, label->x, label->y, label->w, label->h);
+    cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+    cairo_clip(cr);
+    rounded_rect(cr, bw / 2, g->top + bw / 2, w - bw, ph - bw,
+                 ui->border_radius - bw / 2);
+  }
+  set_color(cr, ui->colors.border);
+  cairo_set_line_width(cr, bw);
+  cairo_stroke(cr);
+  cairo_restore(cr);
+}
+
+/* Shows the laid out label in its box. */
+static void draw_label(cairo_t* cr,
+                       const struct config_ui* ui,
+                       PangoLayout* layout,
+                       const struct label_box* label) {
+  set_color(cr, ui->colors.border_label);
+  cairo_move_to(cr, label->x, label->y);
+  pango_cairo_show_layout(cr, layout);
+}
+
+static void draw_header(const struct draw_ctx* dc,
+                        const struct geom* g,
+                        cairo_t* cr,
+                        PangoLayout* layout,
+                        int w) {
+  const struct config_ui* ui = dc->ui;
+  double text_w = w - 2 * g->inset - 2 * ui->row_padding;
+  if (ui->header.len == 0 || text_w <= 0)
+    return;
+  /* Each line is ellipsized on its own. */
+  set_text(layout, sb_str(&ui->header));
+  pango_layout_set_width(layout, (int)(text_w * PANGO_SCALE));
+  pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+  set_color(cr, ui->colors.header);
+  cairo_move_to(cr, g->inset + ui->row_padding, g->header_y + ui->row_padding);
+  pango_cairo_show_layout(cr, layout);
 }
 
 static void draw_query(const struct state* v,
@@ -274,7 +385,7 @@ static void draw_rows(const struct state* v,
   const struct config_ui* ui = dc->ui;
   const struct config_colors* c = &ui->colors;
   double x = g->inset, cw = w - 2 * g->inset;
-  double list_h = h - g->inset - g->list_y;
+  double list_h = h - g->bottom - g->inset - g->list_y;
   size_t n = v->matches.len;
   size_t visible = list_h > 0 ? (size_t)(list_h / g->row_h) : 0;
   if (visible == 0)
@@ -356,10 +467,14 @@ void draw(const struct state* v,
   cairo_paint(cr);
   cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-  draw_panel(cr, ui, w, h);
-
   PangoLayout* layout = pango_cairo_create_layout(cr);
   pango_layout_set_font_description(layout, dc->font);
+
+  struct label_box label;
+  bool has_label = place_label(ui, &g, layout, w, h, &label);
+  draw_panel(cr, ui, &g, has_label ? &label : NULL, w, h);
+  if (has_label)
+    draw_label(cr, ui, layout, &label);
 
   draw_query(v, dc, &g, cr, layout, w);
 
@@ -369,6 +484,7 @@ void draw(const struct state* v,
     cairo_fill(cr);
   }
 
+  draw_header(dc, &g, cr, layout, w);
   draw_rows(v, dc, &g, cr, layout, w, h);
 
   g_object_unref(layout);
