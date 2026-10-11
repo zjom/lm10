@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "action.h"
@@ -32,7 +33,7 @@
 
 struct app {
   struct fdm fdm;
-  struct procs procs;  // reload and execute() commands
+  struct procs procs;  // reload commands
   struct config config;
   struct kb_manager* kb;
   struct input input;  // feeds entries from stdin into the state
@@ -43,11 +44,6 @@ struct app {
   /* The picked entry, run once the event loop has stopped: nothing may
    * change the state after it is set. Without one, lm10 was cancelled. */
   const struct state_entry* pending;
-  /* An execute() is running: keys are ignored until it exits. If waiting,
-   * the rest of the bind's actions, from resume_action, run then. */
-  bool executing, waiting;
-  uint32_t resume_bind;
-  size_t resume_action;
 };
 
 /* Exit statuses */
@@ -172,50 +168,25 @@ static bool reload(struct app* app, const char* cmd) {
                             &app->state, on_entries, app) == 0;
 }
 
-/* What happens after an action. */
-enum flow {
-  FLOW_NEXT,  // run the next one
-  FLOW_STOP,  // skip the rest
-  FLOW_WAIT,  // run the rest once the execute() it started exits
-};
-
-static void run_actions(struct app* app, uint32_t bind, size_t from);
-
-static void on_execute_done(void* data, int status) {
-  (void)status;
-  struct app* app = data;
-  app->executing = false;
-  if (!app->waiting)
-    return;  // exited before run_action returned; it carries on itself
-  app->waiting = false;
-  if (!app->running)
-    return;
-  run_actions(app, app->resume_bind, app->resume_action);
-  if (app->running)
-    render_request(&app->render);
-}
-
-/* Starts sh -c cmd, with its stdout on stderr so it can't disturb lm10's
- * output. */
-static enum flow execute(struct app* app, const char* cmd) {
+/* Runs sh -c cmd and waits for it, with its stdout on stderr so it can't
+ * disturb lm10's output. Keys pressed meanwhile are handled after. */
+static void execute(const char* cmd) {
   LOG_DEBUG("execute: %s", cmd);
   pid_t pid = spawn_sh(cmd, STDERR_FILENO, false);
-  if (pid == -1)
-    return FLOW_NEXT;
-  app->executing = true;
-  procs_watch(&app->procs, pid, false, on_execute_done, app);
-  return app->executing ? FLOW_WAIT : FLOW_NEXT;
+  while (pid != -1 && waitpid(pid, NULL, 0) == -1 && errno == EINTR)
+    ;
 }
 
-/* Runs one action. */
-static enum flow run_action(struct app* app, const struct action* a) {
+/* Runs one action. Returns true if the bind's later actions must be
+ * skipped. */
+static bool run_action(struct app* app, const struct action* a) {
   struct state* st = &app->state;
   bool ok = true;
 
   switch (a->kind) {
     case ACTION_CANCEL:
       app->running = false;
-      return FLOW_STOP;
+      return true;
     case ACTION_DELETE_PREV:
       ok = state_query_delete(st, STATE_MOTION_CHAR_LEFT);
       break;
@@ -258,9 +229,9 @@ static enum flow run_action(struct app* app, const struct action* a) {
     case ACTION_MATCH_EXEC: {
       const struct state_entry* entry = state_get_selection(st);
       if (entry == NULL)
-        return FLOW_NEXT;
+        return false;
       pick(app, entry);
-      return FLOW_STOP;
+      return true;
     }
     case ACTION_MATCH_NEXT:
       state_select_next(st);
@@ -287,53 +258,44 @@ static enum flow run_action(struct app* app, const struct action* a) {
     case ACTION_RELOAD:
     case ACTION_EXECUTE: {
       StrBuf cmd = STRBUF_INIT;
-      enum flow flow = FLOW_NEXT;
+      bool stop = false;
       if (!action_expand(&cmd, a->arg, st)) {
         LOG_WARN("%s: allocation failed", action_name(a->kind));
-        flow = FLOW_STOP;
+        stop = true;
       } else if (a->kind == ACTION_EXECUTE) {
-        flow = execute(app, sb_cstr(&cmd));
+        execute(sb_cstr(&cmd));
       } else if (!reload(app, sb_cstr(&cmd))) {
-        flow = FLOW_STOP;
+        stop = true;
       }
       sb_free(&cmd);
-      return flow;
+      return stop;
     }
   }
   if (!ok)
     LOG_WARN("%s: allocation failed", action_name(a->kind));
-  return FLOW_NEXT;
+  return false;
 }
 
-/* Runs the bind's actions, from the from-th on. */
-static void run_actions(struct app* app, uint32_t bind, size_t from) {
+static void run_actions(struct app* app, uint32_t bind) {
   const ActionList* actions = &app->config.binds.ptr[bind].actions;
-  for (size_t i = from; i < actions->len; i++) {
-    enum flow flow = run_action(app, &actions->ptr[i]);
-    if (flow == FLOW_STOP)
+  for (size_t i = 0; i < actions->len; i++) {
+    if (run_action(app, &actions->ptr[i]))
       return;
-    if (flow == FLOW_WAIT) {
-      app->waiting = true;
-      app->resume_bind = bind;
-      app->resume_action = i + 1;
-      return;
-    }
   }
 }
 
 static void on_key(void* data, const struct kb_result* key) {
   struct app* app = data;
   /* Once the loop is stopping, keys already queued (or repeating) must not
-   * touch the state: a picked entry points into it. While an execute()
-   * runs, the keys are meant for after it. */
-  if (!app->running || app->executing)
+   * touch the state: a picked entry points into it. */
+  if (!app->running)
     return;
 
   if (!key->bound) {
     if (!state_query_insert(&app->state, str_from_cstr(key->text)))
       LOG_WARN("query allocation failed");
   } else {
-    run_actions(app, key->bind, 0);
+    run_actions(app, key->bind);
   }
   if (app->running)
     render_request(&app->render);

@@ -7,17 +7,6 @@
 
 #include "test.h"
 
-struct exit_info {
-  bool done;
-  int status;
-};
-
-static void on_exit_cb(void* data, int status) {
-  struct exit_info* e = data;
-  e->done = true;
-  e->status = status;
-}
-
 static double now(void) {
   struct timespec ts;
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -32,12 +21,10 @@ static void test_watch(void) {
 
   pid_t pid = spawn_sh("exit 3", STDERR_FILENO, false);
   CHECK(pid > 0);
-  struct exit_info e = {0};
-  CHECK(procs_watch(&ps, pid, false, on_exit_cb, &e));
-  while (!e.done)
+  CHECK(procs_watch(&ps, pid, false));
+  while (ps.list.len > 0)
     CHECK(fdm_wait(&fdm) == LM_OK);
-  CHECK(WIFEXITED(e.status) && WEXITSTATUS(e.status) == 3);
-  CHECK(ps.list.len == 0);
+  CHECK(waitpid(pid, NULL, WNOHANG) == -1);  // reaped
 
   procs_destroy(&ps);
   fdm_destroy(&fdm);
@@ -59,7 +46,7 @@ static void test_terminate(void) {
 
   /* An ordinary command, and a background child of it, go on SIGTERM. */
   pid_t pid = spawn_sh("sleep 30 & sleep 30", STDERR_FILENO, true);
-  CHECK(procs_watch(&ps, pid, true, NULL, NULL));
+  CHECK(procs_watch(&ps, pid, true));
   usleep(100 * 1000);
   double start = now();
   procs_terminate(&ps, pid);
@@ -70,7 +57,7 @@ static void test_terminate(void) {
 
   /* One that ignores SIGTERM is killed after the grace period. */
   pid = spawn_sh("trap '' TERM; sleep 30", STDERR_FILENO, true);
-  CHECK(procs_watch(&ps, pid, true, NULL, NULL));
+  CHECK(procs_watch(&ps, pid, true));
   usleep(100 * 1000);
   procs_terminate(&ps, pid);
   double took = wait_gone(&fdm, &ps);
@@ -87,8 +74,8 @@ static void test_destroy_terminates_owned(void) {
   procs_init(&ps, &fdm);
   pid_t owned = spawn_sh("sleep 30", STDERR_FILENO, true);
   pid_t other = spawn_sh("sleep 30", STDERR_FILENO, false);
-  CHECK(procs_watch(&ps, owned, true, NULL, NULL));
-  CHECK(procs_watch(&ps, other, false, NULL, NULL));
+  CHECK(procs_watch(&ps, owned, true));
+  CHECK(procs_watch(&ps, other, false));
   usleep(100 * 1000);
   procs_destroy(&ps);
   fdm_destroy(&fdm);

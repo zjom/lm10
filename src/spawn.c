@@ -141,8 +141,6 @@ struct proc {
   int pidfd;
   int timerfd;  // armed by procs_terminate; -1 until then
   bool owned;
-  proc_exit_fn on_exit;
-  void* data;
 };
 
 static struct proc* find(struct procs* ps, pid_t pid) {
@@ -171,19 +169,12 @@ static void drop(struct proc* p) {
 static enum lm_err on_pidfd(struct fdm* fdm, void* data) {
   (void)fdm;
   struct proc* p = data;
-  int status;
   pid_t r;
-  while ((r = waitpid(p->pid, &status, WNOHANG)) == -1 && errno == EINTR)
+  while ((r = waitpid(p->pid, NULL, WNOHANG)) == -1 && errno == EINTR)
     ;
   if (r == 0)
     return LM_OK;  // not yet
-  if (r == -1)
-    status = 0;
-  proc_exit_fn on_exit = p->on_exit;
-  void* exit_data = p->data;
   drop(p);
-  if (on_exit != NULL)
-    on_exit(exit_data, status);
   return LM_OK;
 }
 
@@ -210,20 +201,10 @@ void procs_destroy(struct procs* ps) {
   LIST_FREE(&ps->list);
 }
 
-bool procs_watch(struct procs* ps,
-                 pid_t pid,
-                 bool owned,
-                 proc_exit_fn on_exit,
-                 void* data) {
+bool procs_watch(struct procs* ps, pid_t pid, bool owned) {
   int pidfd = pidfd_open(pid, 0);
   if (pidfd == -1) {
     LOG_WARN("can't watch process %d: %s", (int)pid, strerror(errno));
-    if (on_exit != NULL) {
-      int status = 0;
-      while (waitpid(pid, &status, 0) == -1 && errno == EINTR)
-        ;
-      on_exit(data, status);
-    }
     return false;
   }
   struct proc* p = malloc(sizeof *p);
@@ -238,8 +219,6 @@ bool procs_watch(struct procs* ps,
       .pidfd = pidfd,
       .timerfd = -1,
       .owned = owned,
-      .on_exit = on_exit,
-      .data = data,
   };
   if (fdm_add(ps->fdm, pidfd, EPOLLIN, on_pidfd, p, FDM_AUTOCLOSE) != 0) {
     close(pidfd);
@@ -256,7 +235,6 @@ void procs_terminate(struct procs* ps, pid_t pid) {
   if (p == NULL)
     return;  // already reaped: its pid may belong to someone else now
   assert(p->owned);
-  p->on_exit = NULL;
   kill(-pid, SIGTERM);
   if (p->timerfd != -1)
     return;
