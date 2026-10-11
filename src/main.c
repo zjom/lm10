@@ -40,7 +40,8 @@ struct app {
   struct render render;  // presents the state
   bool running;
   /* The picked entry, run once the event loop has stopped: nothing may
-   * change the state after it is set. Without one, lm10 was cancelled. */
+   * change the state after it is set, so input stops and keys are ignored.
+   * Without one, lm10 was cancelled. */
   const struct state_entry* pending;
 };
 
@@ -80,8 +81,9 @@ static bool print_entry(const struct state_entry* entry) {
   return ok;
 }
 
-/* Picks entry: the loop stops, and main runs it. */
+/* Picks entry: input and the loop stop, and main runs it. */
 static void pick(struct app* app, const struct state_entry* entry) {
+  input_destroy(&app->input);
   app->pending = entry;
   app->running = false;
 }

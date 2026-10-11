@@ -2,6 +2,7 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <poll.h>
 #include <fractional-scale-v1-client-protocol.h>
 #include <stdlib.h>
 #include <string.h>
@@ -707,8 +708,17 @@ void wayl_prepare(struct wayl* w) {
   }
   w->read_prepared = true;
 
-  if (wl_display_flush(w->display) == -1 && errno != EAGAIN)
-    display_error(w->display);
+  /* A full socket buffer is rare, so rather than watch for the fd to take
+   * more, wait here: requests left unsent would wait for an unrelated
+   * event to wake the loop. */
+  while (wl_display_flush(w->display) == -1) {
+    if (errno == EAGAIN) {
+      struct pollfd pfd = {.fd = w->display_fd, .events = POLLOUT};
+      poll(&pfd, 1, -1);
+    } else if (errno != EINTR) {
+      display_error(w->display);
+    }
+  }
 }
 
 void wayl_finish(struct wayl* w) {

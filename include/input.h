@@ -38,8 +38,8 @@ int input_init_command(struct input* in,
                        void (*on_change)(void* data),
                        void* data);
 
-/* Stops reading. A command that is still running is terminated, without
- * waiting for it. */
+/* Stops reading, if it hasn't already. A command that is still running is
+ * terminated, without waiting for it. */
 void input_destroy(struct input* in);
 
 #endif  // !LM_INPUT_H
