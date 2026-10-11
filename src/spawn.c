@@ -119,7 +119,14 @@ bool spawn_detached(char* const argv[], const char* token) {
 void spawn_exec(char* const argv[], const char* token) {
   set_activation_env(token);
   if (!isatty(STDIN_FILENO)) {
-    int fd = open("/dev/tty", O_RDWR | O_CLOEXEC);
+    /* Prefer the terminal's real path: tmux refuses a stdin opened as
+     * /dev/tty, since its server can't open that path itself. */
+    const char* tty = NULL;
+    if (isatty(STDERR_FILENO))
+      tty = ttyname(STDERR_FILENO);
+    if (tty == NULL && isatty(STDOUT_FILENO))
+      tty = ttyname(STDOUT_FILENO);
+    int fd = open(tty ? tty : "/dev/tty", O_RDWR | O_NOCTTY | O_CLOEXEC);
     if (fd != -1) {
       dup2(fd, STDIN_FILENO);
       close(fd);
