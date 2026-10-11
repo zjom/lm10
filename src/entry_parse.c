@@ -29,13 +29,11 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
     if (str_eq(word, STR("--"))) {
       if (!shellwords_next(&p, end, &word, &err))
         break;
-      if (!LIST_PUSH(&ep->words, word))
-        goto oom;
+      LIST_PUSH(&ep->words, word);
       break;
     }
     if (word.len < 2 || word.ptr[0] != '-') {
-      if (!LIST_PUSH(&ep->words, word))
-        goto oom;
+      LIST_PUSH(&ep->words, word);
       break;
     }
 
@@ -85,10 +83,8 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
   }
 
   /* the rest is the command and its arguments */
-  while (!err && ep->words.len > 0 && shellwords_next(&p, end, &word, &err)) {
-    if (!LIST_PUSH(&ep->words, word))
-      goto oom;
-  }
+  while (!err && ep->words.len > 0 && shellwords_next(&p, end, &word, &err))
+    LIST_PUSH(&ep->words, word);
 
   if (err) {
     LOG_WARN("%s: unterminated quote or escape, skipping line", ep->name);
@@ -102,10 +98,6 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
 
   state_push(ep->state, name, &ep->words, icon, run);
   return true;
-
-oom:
-  LOG_WARN("entry allocation failed");
-  return false;
 }
 
 /* Parses every complete line in the buffer, plus the trailing partial one if
@@ -209,8 +201,7 @@ static bool json_command(struct entry_parser* ep,
             ep->name, json_line(el->value, line));
         return false;
       }
-      if (!LIST_PUSH(&ep->words, word))
-        goto oom;
+      LIST_PUSH(&ep->words, word);
     }
     return true;
   }
@@ -227,10 +218,8 @@ static bool json_command(struct entry_parser* ep,
   char* p = (char*)cmd.ptr;
   char* end = p + cmd.len;
   bool err = false;
-  while (shellwords_next(&p, end, &word, &err)) {
-    if (!LIST_PUSH(&ep->words, word))
-      goto oom;
-  }
+  while (shellwords_next(&p, end, &word, &err))
+    LIST_PUSH(&ep->words, word);
   if (err) {
     LOG_WARN(
         "%s:%zu: unterminated quote or escape in \"command\", "
@@ -239,10 +228,6 @@ static bool json_command(struct entry_parser* ep,
     return false;
   }
   return true;
-
-oom:
-  LOG_WARN("entry allocation failed");
-  return false;
 }
 
 /* Pushes the entry an object describes. Returns true if one was pushed. */
@@ -531,11 +516,9 @@ void entry_parser_destroy(struct entry_parser* ep) {
   LIST_FREE(&ep->words);
 }
 
-bool entry_parser_feed(struct entry_parser* ep, Str data, bool* pushed) {
-  if (!sb_append(&ep->buf, data))
-    return false;
-  *pushed |= drain(ep, false);
-  return true;
+bool entry_parser_feed(struct entry_parser* ep, Str data) {
+  sb_append(&ep->buf, data);
+  return drain(ep, false);
 }
 
 bool entry_parser_finish(struct entry_parser* ep) {

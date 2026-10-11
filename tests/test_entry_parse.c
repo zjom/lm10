@@ -9,10 +9,9 @@ static void parse(struct state* st, const char* src, size_t chunk) {
   struct entry_parser ep;
   entry_parser_init(&ep, "test", st);
   size_t len = strlen(src);
-  bool pushed = false;
   for (size_t i = 0; i < len; i += chunk) {
     size_t n = len - i < chunk ? len - i : chunk;
-    CHECK(entry_parser_feed(&ep, str_from_parts(src + i, n), &pushed));
+    entry_parser_feed(&ep, str_from_parts(src + i, n));
   }
   entry_parser_finish(&ep);
   entry_parser_destroy(&ep);

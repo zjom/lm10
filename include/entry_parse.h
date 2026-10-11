@@ -81,9 +81,9 @@ void entry_parser_init(struct entry_parser* ep,
                        struct state* state);
 void entry_parser_destroy(struct entry_parser* ep);
 
-/* Appends data and pushes every entry it completes; *pushed is set if any
- * was. Returns false on allocation failure, with data dropped. */
-bool entry_parser_feed(struct entry_parser* ep, Str data, bool* pushed);
+/* Appends data and pushes every entry it completes. Returns true if an entry
+ * was pushed. */
+bool entry_parser_feed(struct entry_parser* ep, Str data);
 
 /* The input has ended: pushes whatever is left. Returns true if an entry
  * was pushed. */

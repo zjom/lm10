@@ -35,10 +35,8 @@ static bool read_some(struct input* in, bool* pushed) {
       return true;
     LOG_WARN("%s: read failed: %s", in->parser.name, strerror(errno));
   } else if (n > 0) {
-    if (entry_parser_feed(&in->parser, str_from_parts(chunk, (size_t)n),
-                          pushed))
-      return true;
-    LOG_WARN("%s: allocation failed", in->parser.name);
+    *pushed |= entry_parser_feed(&in->parser, str_from_parts(chunk, (size_t)n));
+    return true;
   }
   *pushed |= entry_parser_finish(&in->parser);
   return false;
