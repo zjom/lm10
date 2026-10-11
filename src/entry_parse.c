@@ -374,7 +374,7 @@ static bool drain_json(struct entry_parser* ep, bool at_eof) {
     }
     if (s->comment == ENTRY_JSON_BLOCK_COMMENT) {
       if (c == '*' && s->pos + 1 == len && !at_eof)
-        break; /* the '/' may be in the next read */
+        break;  // the '/' may be in the next read
       if (c == '*' && s->pos + 1 < len && buf[s->pos + 1] == '/') {
         s->comment = ENTRY_JSON_NO_COMMENT;
         s->pos++;
@@ -399,7 +399,7 @@ static bool drain_json(struct entry_parser* ep, bool at_eof) {
         break;
       case '/':
         if (s->pos + 1 == len && !at_eof)
-          goto out; /* the next byte may be in the next read */
+          goto out;  // the next byte may be in the next read
         if (s->pos + 1 < len && buf[s->pos + 1] == '/') {
           s->comment = ENTRY_JSON_LINE_COMMENT;
           s->pos++;
@@ -462,24 +462,31 @@ out:
     memmove(buf, buf + keep, len - keep);
     sb_truncate(&ep->buf, len - keep);
     s->pos -= keep;
-    s->start = 0; /* the value being read, if any, now starts the buffer */
+    s->start = 0;  // the value being read, if any, now starts the buffer
   }
   return pushed;
 }
 
-/* Picks the format from the first byte that isn't whitespace: JSON if it
- * opens an object, an array or a comment, lines otherwise. */
-static enum entry_format detect_format(const struct entry_parser* ep,
-                                       bool at_eof) {
-  const char* buf = ep->buf.ptr;
-  size_t len = ep->buf.len;
-  size_t i = 0;
+/* Whether JSON starts at buf[i]: an object, an array or a comment. With
+ * array_item, what follows a '[' is checked instead: an entry object, an
+ * array of them, the closing ']' or a comment. Returns ENTRY_FORMAT_UNKNOWN
+ * if it takes more input to tell. */
+static enum entry_format json_at(const char* buf,
+                                 size_t len,
+                                 size_t i,
+                                 bool at_eof,
+                                 bool array_item) {
   while (i < len && is_blank(buf[i]))
     i++;
   if (i == len)
     return at_eof ? ENTRY_FORMAT_LINES : ENTRY_FORMAT_UNKNOWN;
-  if (buf[i] == '{' || buf[i] == '[')
+  if (buf[i] == '{' || (array_item && buf[i] == ']'))
     return ENTRY_FORMAT_JSON;
+  if (buf[i] == '[') {
+    /* A line list can start with the [ command, as in "[ -f x ] && ...". */
+    return array_item ? ENTRY_FORMAT_JSON
+                      : json_at(buf, len, i + 1, at_eof, true);
+  }
   if (buf[i] == '/') {
     if (i + 1 == len)
       return at_eof ? ENTRY_FORMAT_LINES : ENTRY_FORMAT_UNKNOWN;
@@ -487,6 +494,13 @@ static enum entry_format detect_format(const struct entry_parser* ep,
       return ENTRY_FORMAT_JSON;
   }
   return ENTRY_FORMAT_LINES;
+}
+
+/* Picks the format from how the input starts: JSON if it opens an object,
+ * an array or a comment, lines otherwise. */
+static enum entry_format detect_format(const struct entry_parser* ep,
+                                       bool at_eof) {
+  return json_at(ep->buf.ptr, ep->buf.len, 0, at_eof, false);
 }
 
 /* Parses whatever complete entries the buffer holds, and the rest if

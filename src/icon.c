@@ -1,5 +1,6 @@
 #include "icon.h"
 
+#include <dirent.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +36,10 @@ struct icon_theme {
 
 typedef LIST(struct icon_theme) IconThemeList;
 typedef MAP(Str, cairo_surface_t*) IconMap;
+/* File names, e.g. "firefox.png"; keys in the arena. */
+typedef MAP(Str, bool) NameSet;
+/* Directory path -> the icon files in it, or NULL if it can't be read. */
+typedef MAP(Str, NameSet*) DirMap;
 
 struct icon_cache {
   Arena arena;  // owns everything below except icons and the scratch bufs
@@ -44,7 +49,8 @@ struct icon_cache {
   IconThemeList themes;  // theme, what it inherits (depth first), hicolor
   int px;                // size the cached icons are rendered at
   IconMap icons;         // keys in the arena; NULL values for failed lookups
-  StrBuf path, found;    // scratch
+  DirMap listings;       // in the arena; each directory is read once
+  StrBuf path, found, found_name;  // scratch
 };
 
 static bool is_dir(const char* path) {
@@ -307,14 +313,60 @@ static int dir_distance(const struct icon_dir* d, int px) {
   return px < lo ? lo - px : px > hi ? px - hi : 0;
 }
 
+static bool has_icon_ext(Str name) {
+  for (size_t i = 0; i < sizeof exts / sizeof exts[0]; i++) {
+    if (str_ends_with(name, str_from_cstr(exts[i])))
+      return true;
+  }
+  return false;
+}
+
+/* The icon files in dir, read on first use, so a lookup doesn't cost a
+ * syscall per directory and extension. NULL if dir can't be read. */
+static const NameSet* listing(struct icon_cache* c, Str dir) {
+  NameSet** hit = MAP_GET(&c->listings, dir);
+  if (hit != NULL)
+    return *hit;
+
+  NameSet* set = NULL;
+  sb_clear(&c->path);
+  sb_append(&c->path, dir);
+  DIR* d = c->path.failed ? NULL : opendir(sb_cstr(&c->path));
+  if (d != NULL) {
+    set = ARENA_NEW_UNINIT(&c->arena, NameSet);
+    if (set != NULL)
+      *set = (NameSet)MAP_INIT_STR_ARENA(&c->arena);
+    for (struct dirent* e; set != NULL && (e = readdir(d)) != NULL;) {
+      Str name = str_from_cstr(e->d_name);
+      if (!has_icon_ext(name))
+        continue;
+      Str owned = str_arena_dup(&c->arena, name);
+      if (owned.ptr != NULL)
+        MAP_PUT(set, owned, true);
+    }
+    closedir(d);
+  }
+  Str key = str_arena_dup(&c->arena, dir);
+  if (key.ptr != NULL)
+    MAP_PUT(&c->listings, key, set);
+  return set;
+}
+
 /* Whether dir/name.ext exists for one of exts; leaves its path in c->path. */
 static bool find_file(struct icon_cache* c, Str dir, Str name) {
+  const NameSet* files = listing(c, dir);
+  if (files == NULL)
+    return false;
   for (size_t i = 0; i < sizeof exts / sizeof exts[0]; i++) {
+    sb_clear(&c->found_name);
+    sb_appendf(&c->found_name, STR_FMT "%s", STR_ARG(name), exts[i]);
+    if (c->found_name.failed ||
+        !MAP_HAS((NameSet*)files, sb_str(&c->found_name)))
+      continue;
     sb_clear(&c->path);
-    sb_appendf(&c->path, STR_FMT "/" STR_FMT "%s", STR_ARG(dir), STR_ARG(name),
-               exts[i]);
-    if (!c->path.failed && access(sb_cstr(&c->path), R_OK) == 0)
-      return true;
+    sb_appendf(&c->path, STR_FMT "/" STR_FMT, STR_ARG(dir),
+               STR_ARG(sb_str(&c->found_name)));
+    return !c->path.failed;
   }
   return false;
 }
@@ -453,7 +505,9 @@ struct icon_cache* icon_cache_new(const char* theme) {
       .icons = MAP_INIT_STR,
       .path = STRBUF_INIT,
       .found = STRBUF_INIT,
+      .found_name = STRBUF_INIT,
   };
+  c->listings = (DirMap)MAP_INIT_STR_ARENA(&c->arena);
   c->bases = (StrList)LIST_INIT_ARENA(&c->arena);
   c->themes = (IconThemeList)LIST_INIT_ARENA(&c->arena);
   c->theme = str_arena_dup(&c->arena, str_from_cstr(theme));
@@ -471,6 +525,7 @@ void icon_cache_destroy(struct icon_cache* c) {
   MAP_FREE(&c->icons);
   sb_free(&c->path);
   sb_free(&c->found);
+  sb_free(&c->found_name);
   arena_free(&c->arena);
   free(c);
 }

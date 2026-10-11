@@ -250,7 +250,7 @@ static void repeat_stop(struct seat* seat) {
   if (r->fd < 0)
     return;
 
-  struct itimerspec ts = {0}; /* all zero = disarm */
+  struct itimerspec ts = {0};  // all zero = disarm
   if (timerfd_settime(r->fd, 0, &ts, NULL) == -1)
     LOG_WARN("failed to disarm repeat timer: %s", strerror(errno));
 }
@@ -299,14 +299,14 @@ static bool repeat_ensure_fd(struct seat* seat) {
 
 static void repeat_start(struct seat* seat, xkb_keycode_t keycode) {
   struct repeat* r = &seat->repeat;
-  if (r->rate <= 0) /* compositor disabled key repeat */
+  if (r->rate <= 0)  // compositor disabled key repeat
     return;
   if (!repeat_ensure_fd(seat))
     return;
 
   int64_t delay_ns = (int64_t)r->delay * 1000000;
   if (delay_ns <= 0)
-    delay_ns = 1; /* all-zero it_value would disarm the timer */
+    delay_ns = 1;  // all-zero it_value would disarm the timer
 
   struct itimerspec ts = {
       .it_value = ns_to_timespec(delay_ns),
@@ -347,7 +347,7 @@ static void keyboard_handle_key(void* data,
   if (seat->xkb_state == NULL)
     return;
 
-  xkb_keycode_t keycode = key + 8; /* evdev -> XKB */
+  xkb_keycode_t keycode = key + 8;  // evdev -> XKB
 
   if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
     seat->serial = serial;
@@ -441,7 +441,7 @@ static void keyboard_handle_modifiers(void* data,
   (void)wl_keyboard;
   struct seat* seat = data;
   if (seat->xkb_state == NULL)
-    return; /* no keymap: see keyboard_handle_key */
+    return;  // no keymap: see keyboard_handle_key
   xkb_state_update_mask(seat->xkb_state, mods_depressed, mods_latched,
                         mods_locked, 0, 0, group);
 }
@@ -481,7 +481,7 @@ static void seat_keyboard_destroy(struct seat* s) {
 static void seat_destroy(struct seat* s) {
   seat_keyboard_destroy(s);
   if (s->repeat.fd >= 0)
-    fdm_remove(s->wayl->fdm, s->repeat.fd); /* FDM_AUTOCLOSE closes it */
+    fdm_remove(s->wayl->fdm, s->repeat.fd);  // FDM_AUTOCLOSE closes it
   if (s->wl_seat != NULL) {
     if (wl_seat_get_version(s->wl_seat) >= WL_SEAT_RELEASE_SINCE_VERSION)
       wl_seat_release(s->wl_seat);
@@ -614,9 +614,9 @@ static enum lm_err handle_display_events(struct fdm* fdm, void* data) {
   struct wayl* w = data;
 
   if (!w->read_prepared)
-    return LM_OK; /* not a reader right now; main loop will prepare again */
+    return LM_OK;  // not a reader right now; main loop will prepare again
 
-  w->read_prepared = false; /* consumed: wayl_finish has nothing to cancel */
+  w->read_prepared = false;  // consumed: wayl_finish has nothing to cancel
   if (wl_display_read_events(w->display) == -1)
     return report_display_error(w->display);
 
@@ -671,7 +671,7 @@ struct wayl* wayl_new(struct fdm* fdm,
 
   w->registry = wl_display_get_registry(w->display);
   wl_registry_add_listener(w->registry, &registry_listener, w);
-  if (wl_display_roundtrip(w->display) == -1) { /* receive the globals */
+  if (wl_display_roundtrip(w->display) == -1) {  // receive the globals
     report_display_error(w->display);
     return fail(w, "failed to read the compositor's globals");
   }
@@ -718,7 +718,7 @@ struct wayl* wayl_new(struct fdm* fdm,
   zwlr_layer_surface_v1_set_exclusive_zone(w->layer_surface, -1);
   zwlr_layer_surface_v1_set_keyboard_interactivity(
       w->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
-  wl_surface_commit(w->surface); /* empty commit -> triggers first configure */
+  wl_surface_commit(w->surface);  // empty commit -> triggers first configure
 
   int fd = wl_display_get_fd(w->display);
   if (fdm_add(fdm, fd, EPOLLIN | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP,
@@ -743,7 +743,7 @@ void wayl_destroy(struct wayl* w) {
   xkb_context_unref(w->xkb_ctx);
 
   if (w->display_fd >= 0)
-    fdm_remove(w->fdm, w->display_fd); /* no AUTOCLOSE: libwayland owns it */
+    fdm_remove(w->fdm, w->display_fd);  // no AUTOCLOSE: libwayland owns it
   if (w->xdg_activation_v1)
     xdg_activation_v1_destroy(w->xdg_activation_v1);
   if (w->xdg_activation_v1_queue)

@@ -51,7 +51,7 @@ pid_t spawn_sh(const char* cmd, int out_fd, bool new_group) {
     _exit(127);
   }
   if (new_group)
-    setpgid(pid, pid); /* as the child does, whichever runs first */
+    setpgid(pid, pid);  // as the child does, whichever runs first
   return pid;
 }
 
@@ -176,7 +176,7 @@ static enum lm_err on_pidfd(struct fdm* fdm, void* data) {
   while ((r = waitpid(p->pid, &status, WNOHANG)) == -1 && errno == EINTR)
     ;
   if (r == 0)
-    return LM_OK; /* not yet */
+    return LM_OK;  // not yet
   if (r == -1)
     status = 0;
   proc_exit_fn on_exit = p->on_exit;
@@ -254,7 +254,7 @@ bool procs_watch(struct procs* ps,
 void procs_terminate(struct procs* ps, pid_t pid) {
   struct proc* p = find(ps, pid);
   if (p == NULL)
-    return; /* already reaped: its pid may belong to someone else now */
+    return;  // already reaped: its pid may belong to someone else now
   assert(p->owned);
   p->on_exit = NULL;
   kill(-pid, SIGTERM);

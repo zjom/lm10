@@ -19,7 +19,7 @@ static const struct wl_callback_listener frame_listener = {
 
 static void on_frame_release(void* data, struct frame* f) {
   (void)f;
-  try_present(data); /* covers the case where every buffer was busy */
+  try_present(data);  // covers the case where every buffer was busy
 }
 
 /* round(logical * scale), as the fractional-scale protocol prescribes. */
@@ -47,7 +47,7 @@ static struct frame* acquire_frame(struct render* r) {
     }
     return f;
   }
-  return NULL; /* all busy; a release will retry */
+  return NULL;  // all busy; a release will retry
 }
 
 static int try_present(struct render* r) {
@@ -95,7 +95,7 @@ int render_init(struct render* r,
       .shm = shm,
       .state = state,
       .scale120 = 120,
-      .dirty = true, /* nothing drawn yet */
+      .dirty = true,  // nothing drawn yet
   };
   if (draw_ctx_init(&r->dctx, ui) != 0) {
     LOG_ERROR("failed to set up drawing (bad font or out of memory)");

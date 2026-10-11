@@ -116,4 +116,10 @@ executable(
   install: true,
 )
 
+install_data(
+  'README.md',
+  'examples/lm10.ini',
+  install_dir: get_option('datadir') / 'doc' / meson.project_name(),
+)
+
 subdir('tests')

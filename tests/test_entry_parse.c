@@ -140,10 +140,20 @@ static void test_format_detection(void) {
   parse_both(&st, "/usr/bin/foo\n", 1);
   state_destroy(&st);
 
-  /* A line list whose first command is [ (test) is taken for JSON. */
+  /* A line list may start with the [ (test) command... */
   state_init(&st);
-  parse(&st, "[ -f /etc/passwd ]\n", 4096);
-  XFAIL(st.entries.len == 1);
+  parse_both(&st, "[ -f /etc/passwd ] && echo yes\n", 1);
+  state_destroy(&st);
+
+  /* ...while arrays of entries, or empty ones, are JSON. */
+  state_init(&st);
+  parse_both(&st, "[\n  // entries\n  {\"command\": \"x\"}]", 1);
+  state_destroy(&st);
+  state_init(&st);
+  parse_both(&st, "[[{\"command\": \"x\"}], []]", 1);
+  state_destroy(&st);
+  state_init(&st);
+  parse_both(&st, "[]\n{\"command\": \"x\"}", 1);
   state_destroy(&st);
 }
 

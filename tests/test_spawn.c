@@ -63,10 +63,10 @@ static void test_terminate(void) {
   usleep(100 * 1000);
   double start = now();
   procs_terminate(&ps, pid);
-  CHECK(now() - start < 0.1); /* doesn't wait */
+  CHECK(now() - start < 0.1);  // doesn't wait
   CHECK(wait_gone(&fdm, &ps) < 1);
   usleep(100 * 1000);
-  CHECK(kill(-pid, 0) == -1); /* the whole group is gone */
+  CHECK(kill(-pid, 0) == -1);  // the whole group is gone
 
   /* One that ignores SIGTERM is killed after the grace period. */
   pid = spawn_sh("trap '' TERM; sleep 30", STDERR_FILENO, true);
@@ -95,7 +95,7 @@ static void test_destroy_terminates_owned(void) {
 
   int status;
   CHECK(waitpid(owned, &status, 0) == owned && WIFSIGNALED(status));
-  CHECK(waitpid(other, &status, WNOHANG) == 0); /* left running */
+  CHECK(waitpid(other, &status, WNOHANG) == 0);  // left running
   kill(other, SIGKILL);
   waitpid(other, &status, 0);
 }

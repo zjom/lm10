@@ -47,10 +47,10 @@ static void test_unicode_matching(void) {
 
   CHECK(state_query_set(&st, STR("üb")));
   check_matches(&st, "Über|ÜBERALL|über");
-  check_span(&st, 0, 0, 3); /* Ü is two bytes */
+  check_span(&st, 0, 0, 3);  // Ü is two bytes
 
   CHECK(state_query_set(&st, STR("SSE")));
-  check_matches(&st, ""); /* simple case mapping only: ß isn't ss */
+  check_matches(&st, "");  // simple case mapping only: ß isn't ss
   CHECK(state_query_set(&st, STR("STRA")));
   check_matches(&st, "Straße");
   CHECK(state_query_set(&st, STR("ASC")));
@@ -74,7 +74,7 @@ static void test_invalid_utf8(void) {
   const struct state_entry* e = &st.entries.ptr[0];
   CHECK(e->name.len > 0 && e->name.ptr[e->name.len] == '\0');
   CHECK(strstr(e->name.ptr, "\xff") == NULL);
-  CHECK(strstr(e->name.ptr, "\xef\xbf\xbd") != NULL); /* U+FFFD */
+  CHECK(strstr(e->name.ptr, "\xef\xbf\xbd") != NULL);  // U+FFFD
 
   CHECK(state_query_insert(&st, STR("a\xfe")));
   CHECK(strstr(sb_cstr(&st.query), "\xfe") == NULL);

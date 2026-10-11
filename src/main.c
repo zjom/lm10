@@ -1,23 +1,12 @@
 /*
- * lm10: a Wayland picker. Lists entries read from stdin, one per line as
- * `[-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]` or as JSON objects (see
- * input.h); typing filters them,
- * C-n / C-p move the selection, Return picks it: -x execs it, -X runs it
- * detached, and otherwise its command line is printed to stdout.
+ * lm10: a Wayland picker. Entries come from stdin (see entry_parse.h for the
+ * formats); typing filters them and picking one prints, execs or detaches
+ * it. The look and the keys come from lm10.ini (config.h) and flags (usage
+ * below). See README.md for building and running it.
  *
- * Build:
- * meson setup bld/debug && ninja -C bld/debug
- *
- * The look and the keys are set in ~/.config/lm10/lm10.ini (or -c PATH); see
- * config.h. A key runs a list of actions, e.g. Control+r =
- * change-prompt(> )+reload(ls ~) swaps the prompt and the entries.
- * Flags override the file for one run: --KEY VALUE for a [main] key,
- * --color NAME=VALUE,... and --bind KEY=ACTIONS, e.g. --color text=#ffffff.
- *
- * Run inside a Wayland session (GNOME, KDE, Sway, ...):
- *   printf '%s\n' '-n Ranger -i ranger.svg kitty ranger' '-X foot' |
- * ./bld/debug/lm10
- *   ./bld/debug/lm10 < examples/session.jsonc
+ * main wires the parts together: input feeds the state, wayl turns key
+ * presses into the actions below, and render draws the state on wayl's
+ * surface. The picked entry runs once all of that has been torn down.
  */
 #include <errno.h>
 #include <getopt.h>
@@ -65,7 +54,7 @@ struct app {
 enum {
   EXIT_PICKED = 0,
   EXIT_ERROR = 1,
-  EXIT_CANCELLED = 130, /* nothing was picked, as in fzf */
+  EXIT_CANCELLED = 130,  // nothing was picked, as in fzf
 };
 
 /* A NULL-terminated argv pointing into entry, or NULL on allocation failure.
@@ -77,7 +66,7 @@ static char** entry_argv(const struct state_entry* entry) {
     return NULL;
   }
   for (size_t i = 0; i < entry->argv.len; i++)
-    argv[i] = (char*)entry->argv.ptr[i].ptr; /* NUL-terminated */
+    argv[i] = (char*)entry->argv.ptr[i].ptr;  // NUL-terminated
   return argv;
 }
 
@@ -185,9 +174,9 @@ static bool reload(struct app* app, const char* cmd) {
 
 /* What happens after an action. */
 enum flow {
-  FLOW_NEXT, /* run the next one */
-  FLOW_STOP, /* skip the rest */
-  FLOW_WAIT, /* run the rest once the execute() it started exits */
+  FLOW_NEXT,  // run the next one
+  FLOW_STOP,  // skip the rest
+  FLOW_WAIT,  // run the rest once the execute() it started exits
 };
 
 static void run_actions(struct app* app, uint32_t bind, size_t from);
@@ -197,7 +186,7 @@ static void on_execute_done(void* data, int status) {
   struct app* app = data;
   app->executing = false;
   if (!app->waiting)
-    return; /* exited before run_action returned; it carries on itself */
+    return;  // exited before run_action returned; it carries on itself
   app->waiting = false;
   if (!app->running)
     return;
@@ -457,7 +446,7 @@ static bool load_config(struct config* cfg,
 
   StrBuf def = STRBUF_INIT;
   bool explicit_path = path != NULL;
-  int ret = 1; /* nowhere to look; the defaults will do */
+  int ret = 1;  // nowhere to look; the defaults will do
   if (path == NULL && config_default_path(&def))
     path = sb_cstr(&def);
   if (path != NULL)
@@ -488,7 +477,7 @@ static bool load_config(struct config* cfg,
 
 int main(int argc, char** argv) {
   int err = 0;
-  char* token = NULL; /* activation token for the picked entry */
+  char* token = NULL;  // activation token for the picked entry
   bool fdm_ok = false, render_ok = false, input_ok = false;
   const char* config_path = NULL;
   /* config flags, in order; there are fewer than argc of them */
@@ -562,7 +551,7 @@ int main(int argc, char** argv) {
   procs_init(&app.procs, &app.fdm);
 
   bool config_ok = load_config(&app.config, config_path, flags, n_flags);
-  free(flags); /* the flags were copied into the config */
+  free(flags);  // the flags were copied into the config
   if (!config_ok) {
     err = 1;
     goto cleanup;
@@ -616,14 +605,14 @@ int main(int argc, char** argv) {
       goto cleanup;
     }
 
-    if (!app.running) { /* a dispatched event may have asked us to quit */
+    if (!app.running) {  // a dispatched event may have asked us to quit
       wayl_finish(app.wayl);
       break;
     }
 
     enum lm_err wait_err = fdm_wait(&app.fdm);
     wayl_finish(app.wayl);
-    if (wait_err != LM_OK) { /* already logged */
+    if (wait_err != LM_OK) {  // already logged
       err = 1;
       goto cleanup;
     }
@@ -647,15 +636,15 @@ cleanup:
   if (input_ok)
     input_destroy(&app.input);
   if (render_ok)
-    render_destroy(&app.render); /* before wayl: uses its surface and shm */
+    render_destroy(&app.render);  // before wayl: uses its surface and shm
   wayl_destroy(app.wayl);
-  kb_manager_destroy(app.kb); /* after wayl: it looks keys up in it */
+  kb_manager_destroy(app.kb);  // after wayl: it looks keys up in it
   if (fdm_ok) {
-    procs_destroy(&app.procs); /* after input: it terminates through procs */
+    procs_destroy(&app.procs);  // after input: it terminates through procs
     fdm_destroy(&app.fdm);
   }
   if (err == 0 && app.pending != NULL && !run_entry(app.pending, token))
-    err = 1; /* the entry lives in state, which is still alive */
+    err = 1;  // the entry lives in state, which is still alive
   free(token);
   state_destroy(&app.state);
   config_destroy(&app.config);
