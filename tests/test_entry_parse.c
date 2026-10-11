@@ -83,84 +83,19 @@ static void test_bad_lines(void) {
   state_destroy(&st);
 }
 
-static void test_json(void) {
+static void test_brackets(void) {
   struct state st;
   state_init(&st);
-  parse_both(
-      &st,
-      "// leading comment\n"
-      "[\n"
-      "  {\"name\": \"Lock\", \"icon\": \"lock\", \"run\": \"detach\",\n"
-      "   \"command\": \"loginctl lock-session\"},\n"
-      "  /* a [block] comment with \"quotes\" */\n"
-      "  {\"command\": [\"sh\", \"-c\", \"echo '}'\"], \"icon\": null},\n"
-      "]\n"
-      "{\"command\": \"x\", \"run\": \"exec\",}\n",
-      3);
-  if (st.entries.len == 3) {
-    CHECK_STR(entry(&st, 0)->name, "Lock");
-    CHECK(entry(&st, 0)->argv.len == 2);
-    CHECK(entry(&st, 0)->run == STATE_RUN_DETACH);
-
-    CHECK_STR(entry(&st, 1)->name, "sh -c echo '}'");
-    CHECK(entry(&st, 1)->argv.len == 3);
-    CHECK_STR(entry(&st, 1)->icon, "");
-    CHECK(!entry(&st, 1)->icon_guessed);
-
-    CHECK(entry(&st, 2)->run == STATE_RUN_EXEC);
-  }
-  state_destroy(&st);
-}
-
-static void test_bad_json(void) {
-  struct state st;
-  state_init(&st);
-  /* Each bad element is skipped on its own. */
-  parse_both(&st,
-             "[{\"command\": 1}, {\"name\": \"no command\"},\n"
-             " {\"command\": \"x\", \"run\": \"later\"}, 42, \"str\",\n"
-             " {\"command\": \"ok\", \"unknown\": true},\n"
-             " {\"command\": \"a\" \"b\"}]\n"
-             "{\"command\": \"unterminated\"",
-             1);
-  if (st.entries.len == 1)
-    CHECK_STR(entry(&st, 0)->name, "ok");
-  state_destroy(&st);
-}
-
-static void test_format_detection(void) {
-  struct state st;
-  state_init(&st);
-  /* Blank lines before the first value don't decide the format. */
-  parse_both(&st, "\n\n  {\"command\": \"x\"}", 1);
-  state_destroy(&st);
-
-  state_init(&st);
-  parse_both(&st, "/usr/bin/foo\n", 1);
-  state_destroy(&st);
-
-  /* A line list may start with the [ (test) command... */
-  state_init(&st);
-  parse_both(&st, "[ -f /etc/passwd ] && echo yes\n", 1);
-  state_destroy(&st);
-
-  /* ...while arrays of entries, or empty ones, are JSON. */
-  state_init(&st);
-  parse_both(&st, "[\n  // entries\n  {\"command\": \"x\"}]", 1);
-  state_destroy(&st);
-  state_init(&st);
-  parse_both(&st, "[[{\"command\": \"x\"}], []]", 1);
-  state_destroy(&st);
-  state_init(&st);
-  parse_both(&st, "[]\n{\"command\": \"x\"}", 1);
+  /* Lines may start with anything, even the [ command or a brace. */
+  parse_both(&st, "[ -f /etc/passwd ]\n{ echo; }\n", 2);
+  if (st.entries.len == 2)
+    CHECK_STR(entry(&st, 0)->argv.ptr[0], "[");
   state_destroy(&st);
 }
 
 int main(void) {
   RUN(test_lines);
   RUN(test_bad_lines);
-  RUN(test_json);
-  RUN(test_bad_json);
-  RUN(test_format_detection);
+  RUN(test_brackets);
   return TEST_RESULT;
 }

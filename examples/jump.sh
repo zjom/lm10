@@ -6,22 +6,20 @@
 #   j ~/src /etc    # repos under these instead
 # Set LM10 if lm10 isn't on PATH. Needs jq and GNU find.
 #
-# Entries without -x/-X or "run" print their command line, shell-quoted, when
-# picked. That lets the calling shell eval it, which is the only way to run
-# something like cd that has to happen in that shell. The entries are built
-# as JSONL by jq, which takes care of quoting the paths.
+# Entries without -x/-X print their command line, shell-quoted, when picked.
+# That lets the calling shell eval it, which is the only way to run something
+# like cd that has to happen in that shell. jq builds the entries, quoting
+# the paths.
 j() {
   local cmd
   cmd=$(
     find "${@:-$HOME/projects}" -mindepth 1 -maxdepth 4 \
       -name .git -prune -printf '%h\n' 2>/dev/null |
       sort -u |
-      jq -Rc --arg home "$HOME" '{
-        name: (if startswith($home + "/") then "~" + .[($home | length):]
-               else . end),
-        icon: "folder",
-        command: ["cd", "--", .]
-      }' |
+      jq -Rr --arg home "$HOME" '
+        (if startswith($home + "/") then "~" + .[($home | length):]
+         else . end) as $name |
+        "-n \($name | @sh) -i folder cd -- \(. | @sh)"' |
       "${LM10:-lm10}"
   ) && [ -n "$cmd" ] && eval "$cmd"
 }

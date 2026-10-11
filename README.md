@@ -42,17 +42,6 @@ Each line of input is an entry, with shell-style quoting:
 - With neither, the command line is printed to stdout, shell-quoted, for the
   caller to use.
 
-Input that starts with `{`, `[` or a comment is read as JSON with comments
-(JSONC) instead: a stream of entry objects, or arrays of them.
-
-```json
-{"name": "Lock", "icon": "system-lock-screen", "run": "detach",
- "command": ["loginctl", "lock-session"]}
-```
-
-`run` is `"print"` (the default), `"exec"` or `"detach"`. `command` is either an
-argv array, or a string that is split like a line.
-
 lm10 exits with 0 once something was picked, 130 if nothing was (the list was
 cancelled), and 1 on an error.
 
@@ -90,8 +79,8 @@ output. `LM10_LOG=error|warn|info|debug|trace` sets the level as well.
 
 - [`examples/apps.sh`](examples/apps.sh) is an app launcher built on the
   installed `.desktop` files.
-- [`examples/session.jsonc`](examples/session.jsonc) is a session menu (lock,
-  log out, suspend, and so on): `lm10 < examples/session.jsonc`.
+- [`examples/session.sh`](examples/session.sh) is a session menu (lock, log
+  out, suspend, and so on).
 - [`examples/jump.sh`](examples/jump.sh) is a `cd` into git repositories, for
   bash and zsh.
 - [`examples/tmux.sh`](examples/tmux.sh) is a tmux session picker with key
