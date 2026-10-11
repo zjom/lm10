@@ -2,8 +2,8 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <poll.h>
 #include <fractional-scale-v1-client-protocol.h>
+#include <poll.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
@@ -644,7 +644,7 @@ struct wayl* wayl_new(struct fdm* fdm, struct app* app, const char* namespace) {
   zwlr_layer_surface_v1_set_exclusive_zone(w->layer_surface, -1);
   zwlr_layer_surface_v1_set_keyboard_interactivity(
       w->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
-  wl_surface_commit(w->surface);  // empty commit -> triggers first configure
+  wl_surface_commit(w->surface);
 
   int fd = wl_display_get_fd(w->display);
   if (fdm_add(fdm, fd, EPOLLIN | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP,

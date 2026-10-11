@@ -36,8 +36,8 @@ struct app {
   struct config config;
   struct input input;  // feeds entries from stdin into the state
   struct wayl* wayl;
-  struct state state;    // the state
-  struct render render;  // presents the state
+  struct state state;
+  struct render render;
   bool running;
   /* The picked entry, run once the event loop has stopped: nothing may
    * change the state after it is set, so input stops and keys are ignored.
@@ -444,8 +444,8 @@ int main(int argc, char** argv) {
   }
   input_ok = true;
 
-  // we may have inherited XDG_ACTIVATION_TOKEN
-  // from launching parent process.
+  /* A token lm10 was started with was for lm10: a picked entry gets its
+   * own, or none. */
   unsetenv("XDG_ACTIVATION_TOKEN");
   unsetenv("DESKTOP_STARTUP_ID");
 

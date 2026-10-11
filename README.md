@@ -8,7 +8,8 @@ what you feed it.
 
 lm10 draws a [wlr-layer-shell] surface, so it needs a compositor that supports
 that protocol: sway, Hyprland, KDE Plasma, niri, river, labwc and others.
-GNOME doesn't.
+GNOME doesn't. It runs on Linux only (5.3 or later), since it uses epoll,
+timerfd, pidfd_open and memfd_create.
 
 [wlr-layer-shell]: https://wayland.app/protocols/wlr-layer-shell-unstable-v1
 
