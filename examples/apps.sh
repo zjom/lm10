@@ -27,7 +27,7 @@ entry() {
       gsub(/%[fFuUdDnNickvm]/, "", exec)
       gsub(/%%/, "%", exec)
       sub(/[ \t]+$/, "", exec)
-      printf "-X -n %s -i %s -- %s\n", q(f["Name"]), q(f["Icon"]), exec
+      printf "-X -n %s -- %s\n", q(f["Name"]), exec
     }' "$1"
 }
 

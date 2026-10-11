@@ -37,7 +37,6 @@
             wayland-protocols
             pango
             cairo
-            librsvg
             libxkbcommon
           ];
 

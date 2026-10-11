@@ -20,7 +20,6 @@ wayland_client = dependency('wayland-client', include_type: 'system')
 wayland_protocols = dependency('wayland-protocols', version: '>=1.31')
 pangocairo = dependency('pangocairo', include_type: 'system')
 glib = dependency('glib-2.0', include_type: 'system')
-librsvg = dependency('librsvg-2.0', include_type: 'system')
 xkbcommon = dependency('xkbcommon', include_type: 'system')
 m = meson.get_compiler('c').find_library('m', required: false)
 
@@ -91,7 +90,6 @@ core_srcs = files(
   'src/entry_parse.c',
   'src/fdm.c',
   'src/frame.c',
-  'src/icon.c',
   'src/input.c',
   'src/kb.c',
   'src/render.c',
@@ -103,7 +101,7 @@ core_srcs = files(
 )
 
 core_inc = [include_directories('include'), third_party_inc]
-core_deps = [wayland_client, glib, pangocairo, librsvg, xkbcommon, m]
+core_deps = [wayland_client, glib, pangocairo, xkbcommon, m]
 
 core_lib = static_library(
   'lm10-core',

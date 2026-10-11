@@ -17,8 +17,7 @@ void config_init(struct config* cfg) {
              .prompt = STRBUF_INIT,
              .placeholder = STRBUF_INIT,
              .header = STRBUF_INIT,
-             .border_label = STRBUF_INIT,
-             .icon_theme = STRBUF_INIT},
+             .border_label = STRBUF_INIT},
   };
 }
 
@@ -30,7 +29,6 @@ void config_destroy(struct config* cfg) {
   sb_free(&cfg->ui.placeholder);
   sb_free(&cfg->ui.header);
   sb_free(&cfg->ui.border_label);
-  sb_free(&cfg->ui.icon_theme);
 }
 
 static void set_str(StrBuf* dst, Str s) {
@@ -65,7 +63,6 @@ static void load_default_ui(struct config_ui* ui) {
   ui->selection_radius = 8;
   ui->fuzzy = false;
   ui->show_counter = true;
-  ui->icons = true;
   ui->border_label_pos = 0;
   ui->border_label_bottom = false;
   ui->colors = (struct config_colors){
@@ -90,7 +87,6 @@ static void load_default_ui(struct config_ui* ui) {
   set_str(&ui->placeholder, STR("Search…"));
   set_str(&ui->header, STR(""));
   set_str(&ui->border_label, STR(""));
-  set_str(&ui->icon_theme, STR("hicolor"));
 }
 
 bool config_default_path(StrBuf* out) {
@@ -210,8 +206,6 @@ const struct config_key config_main_keys[] = {
     {"border-radius", "N", CONFIG_INT, UI(border_radius), 0},
     {"selection-radius", "N", CONFIG_INT, UI(selection_radius), 0},
     {"show-counter", "yes|no", CONFIG_BOOL, UI(show_counter), 0},
-    {"icons", "yes|no", CONFIG_BOOL, UI(icons), 0},
-    {"icon-theme", "NAME", CONFIG_STRING, UI(icon_theme), 0},
 };
 const size_t config_n_main_keys =
     sizeof config_main_keys / sizeof config_main_keys[0];

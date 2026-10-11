@@ -15,8 +15,6 @@
  *   [OPTION...] COMMAND [ARG...]
  *
  *   -n/--name NAME   display name; defaults to the command line
- *   -i/--icon ICON   display icon; defaults to the command's basename, and
- *                    '' means none
  *   -x/--exec        exec the command in place of lm10
  *   -X/--detach      run the command in a new session, detached from lm10
  *

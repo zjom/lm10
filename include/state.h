@@ -19,8 +19,6 @@ enum state_run {
 struct state_entry {
   Str name;           // valid UTF-8, NUL-terminated, lives in the state arena
   StrList argv;       // each Str NUL-terminated, lives in the state arena
-  Str icon;           // NUL-terminated, lives in the state arena; may be empty
-  bool icon_guessed;  // icon wasn't given; it is the command's basename
   enum state_run run;
 };
 
@@ -66,14 +64,12 @@ struct state {
 void state_init(struct state* state);
 void state_destroy(struct state* state);
 
-/* Copies name, argv and icon into state->arena. argv must be non-empty. If
- * name is empty, argv joined with spaces is used; invalid UTF-8 in it is
- * replaced. If icon is null (ptr NULL), the basename of argv[0] is guessed;
- * an empty non-null icon means none. */
+/* Copies name and argv into state->arena. argv must be non-empty. If name
+ * is empty, argv joined with spaces is used; invalid UTF-8 in it is
+ * replaced. */
 void state_push(struct state* state,
                 Str name,
                 const StrList* argv,
-                Str icon,
                 enum state_run run);
 
 /* Drops every entry, keeping the query. */

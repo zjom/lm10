@@ -7,7 +7,7 @@
 static void push(struct state* st, const char* name) {
   StrList argv = LIST_INIT;
   LIST_PUSH(&argv, STR("cmd"));
-  state_push(st, str_from_cstr(name), &argv, STR(""), STATE_RUN_PRINT);
+  state_push(st, str_from_cstr(name), &argv, STATE_RUN_PRINT);
   LIST_FREE(&argv);
 }
 

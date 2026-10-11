@@ -11,7 +11,7 @@
 static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
   char* p = line;
   char* end = line + len;
-  Str name = {0}, icon = {0};
+  Str name = {0};
   enum state_run run = STATE_RUN_PRINT;
   bool err = false;
   Str word;
@@ -40,7 +40,6 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
       continue;
     }
 
-    Str* dst;
     Str val;
     bool has_val = false;
     if (str_starts_with(word, STR("--"))) {
@@ -55,11 +54,8 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
       LOG_WARN("%s: option \"%.*s\" takes no value, skipping line", ep->name,
                (int)word.len, word.ptr);
       return false;
-    } else if (str_eq(word, STR("-n")) || str_eq(word, STR("--name"))) {
-      dst = &name;
-    } else if (str_eq(word, STR("-i")) || str_eq(word, STR("--icon"))) {
-      dst = &icon;
-    } else {
+    }
+    if (!str_eq(word, STR("-n")) && !str_eq(word, STR("--name"))) {
       LOG_WARN("%s: unknown option \"%.*s\", skipping line", ep->name,
                (int)word.len, word.ptr);
       return false;
@@ -73,7 +69,7 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
       }
       break;
     }
-    *dst = val;
+    name = val;
   }
 
   /* the rest is the command and its arguments */
@@ -90,7 +86,7 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
     return false;
   }
 
-  state_push(ep->state, name, &ep->words, icon, run);
+  state_push(ep->state, name, &ep->words, run);
   return true;
 }
 

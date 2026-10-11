@@ -19,7 +19,7 @@ j() {
       jq -Rr --arg home "$HOME" '
         (if startswith($home + "/") then "~" + .[($home | length):]
          else . end) as $name |
-        "-n \($name | @sh) -i folder cd -- \(. | @sh)"' |
+        "-n \($name | @sh) cd -- \(. | @sh)"' |
       "${LM10:-lm10}"
   ) && [ -n "$cmd" ] && eval "$cmd"
 }

@@ -15,7 +15,7 @@ GNOME doesn't.
 ## Building
 
 You need meson, ninja, pkg-config, wayland-scanner, and the development files
-for wayland, wayland-protocols, pango, cairo, librsvg and libxkbcommon.
+for wayland, wayland-protocols, pango, cairo and libxkbcommon.
 
 ```sh
 meson setup bld/debug
@@ -31,12 +31,10 @@ everything above.
 Each line of input is an entry, with shell-style quoting:
 
 ```
-[-n NAME] [-i ICON] [-x|-X] COMMAND [ARG...]
+[-n NAME] [-x|-X] COMMAND [ARG...]
 ```
 
 - `-n` sets the name that's shown and matched. It defaults to the command line.
-- `-i` sets an icon, either a freedesktop icon name or a path. It defaults to
-  the command's basename, and `-i ''` means no icon.
 - `-x` makes lm10 exec the command in its place, keeping its terminal.
 - `-X` starts the command detached, in a new session.
 - With neither, the command line is printed to stdout, shell-quoted, for the

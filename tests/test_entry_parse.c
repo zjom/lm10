@@ -38,31 +38,26 @@ static void test_lines(void) {
   struct state st;
   state_init(&st);
   parse_both(&st,
-             "-n Ranger -i ranger.svg kitty ranger\n"
+             "-n Ranger kitty ranger\n"
              "\n"
              "-X foot\r\n"
-             "--name='a b' --icon= -x -- -dash arg\n"
+             "--name='a b' -x -- -dash arg\n"
              "/usr/bin/true",
              4);
   if (st.entries.len == 4) {
     CHECK_STR(entry(&st, 0)->name, "Ranger");
-    CHECK_STR(entry(&st, 0)->icon, "ranger.svg");
-    CHECK(!entry(&st, 0)->icon_guessed);
     CHECK(entry(&st, 0)->run == STATE_RUN_PRINT);
     CHECK(entry(&st, 0)->argv.len == 2);
 
     CHECK_STR(entry(&st, 1)->name, "foot");
-    CHECK_STR(entry(&st, 1)->icon, "foot");
-    CHECK(entry(&st, 1)->icon_guessed);
     CHECK(entry(&st, 1)->run == STATE_RUN_DETACH);
 
     CHECK_STR(entry(&st, 2)->name, "a b");
-    CHECK_STR(entry(&st, 2)->icon, "");
     CHECK(entry(&st, 2)->run == STATE_RUN_EXEC);
     CHECK_STR(entry(&st, 2)->argv.ptr[0], "-dash");
 
-    /* The unterminated last line counts, and the icon is the basename. */
-    CHECK_STR(entry(&st, 3)->icon, "true");
+    /* The unterminated last line counts. */
+    CHECK_STR(entry(&st, 3)->name, "/usr/bin/true");
   }
   state_destroy(&st);
 }

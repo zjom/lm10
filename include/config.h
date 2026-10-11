@@ -58,8 +58,6 @@ struct config_ui {
   int selection_radius;
   bool fuzzy;            // match the query as a subsequence, best matches first
   bool show_counter;     // "matches/entries" at the right of the query row
-  bool icons;            // draw entry icons
-  StrBuf icon_theme;     // freedesktop icon theme to look them up in
   StrBuf header;         // lines between the query and the rows; may be empty
   StrBuf border_label;   // drawn in a gap in the border; may be empty
   int border_label_pos;  // 0 centers it, N > 0 puts it N pixels from the left

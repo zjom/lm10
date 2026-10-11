@@ -316,26 +316,14 @@ static void set_utf8(StrBuf* b, Str s) {
 void state_push(struct state* state,
                 Str name,
                 const StrList* argv,
-                Str icon,
                 enum state_run run) {
   struct state_entry e = {
       .argv = LIST_INIT_ARENA(&state->arena),
       .run = run,
   };
-  if (icon.ptr != NULL)
-    e.icon = str_arena_dup(&state->arena, icon);
   LIST_RESERVE(&e.argv, argv->len);
   ARR_FOREACH(const Str, w, argv)
     LIST_PUSH(&e.argv, str_arena_dup(&state->arena, *w));
-
-  /* Apps are usually installed with an icon named after their binary. The
-   * basename ends where argv[0] does, so it stays NUL-terminated. */
-  if (icon.ptr == NULL) {
-    Str cmd = e.argv.ptr[0];
-    size_t slash = str_rfind_char(cmd, '/');
-    e.icon = slash == STR_NPOS ? cmd : str_slice(cmd, slash + 1, cmd.len);
-    e.icon_guessed = true;
-  }
 
   /* The name is drawn and matched as text, so it must be valid UTF-8. */
   StrBuf b = STRBUF_INIT_ARENA(&state->arena);

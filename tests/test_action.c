@@ -37,7 +37,7 @@ static void push(struct state* st, const char* name, const char* const* argv) {
   StrList words = LIST_INIT;
   for (size_t i = 0; argv[i] != NULL; i++)
     LIST_PUSH(&words, str_from_cstr(argv[i]));
-  state_push(st, str_from_cstr(name), &words, STR(""), STATE_RUN_PRINT);
+  state_push(st, str_from_cstr(name), &words, STATE_RUN_PRINT);
   LIST_FREE(&words);
 }
 
