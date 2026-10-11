@@ -52,6 +52,9 @@ bool state_push(struct state* state,
                 Str icon,
                 enum state_run run);
 
+/* Drops every entry, keeping the query. */
+void state_clear_entries(struct state* state);
+
 /* Cursor targets. Words are runs of non-space characters. */
 enum state_motion {
   STATE_MOTION_CHAR_LEFT,
@@ -68,6 +71,8 @@ bool state_query_insert(struct state* state, Str text);  // at the cursor
 /* Deletes between the cursor and where the motion would move it. */
 bool state_query_delete(struct state* state, enum state_motion motion);
 bool state_query_clear(struct state* state);
+/* Replaces the query, with the cursor at its end. */
+bool state_query_set(struct state* state, Str text);
 void state_cursor_move(struct state* state, enum state_motion motion);
 
 void state_select_next(struct state* state);

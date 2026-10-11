@@ -7,13 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <xkbcommon/xkbcommon-keysyms.h>
-#include <xkbcommon/xkbcommon.h>
-
 #include "log.h"
 
 void config_init(struct config* cfg) {
   *cfg = (struct config){
+      .arena = ARENA_INIT,
       .binds = LIST_INIT,
       .ui = {.font = STRBUF_INIT,
              .prompt = STRBUF_INIT,
@@ -24,6 +22,7 @@ void config_init(struct config* cfg) {
 
 void config_destroy(struct config* cfg) {
   LIST_FREE(&cfg->binds);
+  arena_free(&cfg->arena);
   sb_free(&cfg->ui.font);
   sb_free(&cfg->ui.prompt);
   sb_free(&cfg->ui.placeholder);
@@ -70,52 +69,6 @@ static bool load_default_ui(struct config_ui* ui) {
          set_str(&ui->prompt, STR("❯ ")) &&
          set_str(&ui->placeholder, STR("Search…")) &&
          set_str(&ui->icon_theme, STR("hicolor"));
-}
-
-bool config_load_defaults(struct config* cfg) {
-  static const struct config_bind defaults[] = {
-      {{0, XKB_KEY_Escape}, KB_ACTION_CANCEL},
-      {{KB_MOD_CTRL, XKB_KEY_g}, KB_ACTION_CANCEL},
-
-      {{0, XKB_KEY_BackSpace}, KB_ACTION_DELETE_PREV},
-      {{KB_MOD_SHIFT, XKB_KEY_BackSpace}, KB_ACTION_DELETE_PREV},
-      {{KB_MOD_CTRL, XKB_KEY_h}, KB_ACTION_DELETE_PREV},
-      {{KB_MOD_CTRL, XKB_KEY_w}, KB_ACTION_DELETE_PREV_WORD},
-      {{KB_MOD_CTRL, XKB_KEY_BackSpace}, KB_ACTION_DELETE_PREV_WORD},
-      {{KB_MOD_ALT, XKB_KEY_BackSpace}, KB_ACTION_DELETE_PREV_WORD},
-      {{0, XKB_KEY_Delete}, KB_ACTION_DELETE_NEXT},
-      {{0, XKB_KEY_KP_Delete}, KB_ACTION_DELETE_NEXT},
-      {{KB_MOD_CTRL, XKB_KEY_d}, KB_ACTION_DELETE_NEXT},
-      {{KB_MOD_CTRL, XKB_KEY_Delete}, KB_ACTION_DELETE_NEXT_WORD},
-      {{KB_MOD_ALT, XKB_KEY_d}, KB_ACTION_DELETE_NEXT_WORD},
-      {{KB_MOD_CTRL, XKB_KEY_k}, KB_ACTION_DELETE_LINE_END},
-      {{KB_MOD_CTRL, XKB_KEY_u}, KB_ACTION_DELETE_LINE_START},
-
-      {{0, XKB_KEY_Left}, KB_ACTION_CURSOR_LEFT},
-      {{KB_MOD_CTRL, XKB_KEY_b}, KB_ACTION_CURSOR_LEFT},
-      {{0, XKB_KEY_Right}, KB_ACTION_CURSOR_RIGHT},
-      {{KB_MOD_CTRL, XKB_KEY_f}, KB_ACTION_CURSOR_RIGHT},
-      {{KB_MOD_CTRL, XKB_KEY_Left}, KB_ACTION_CURSOR_WORD_LEFT},
-      {{KB_MOD_ALT, XKB_KEY_b}, KB_ACTION_CURSOR_WORD_LEFT},
-      {{KB_MOD_CTRL, XKB_KEY_Right}, KB_ACTION_CURSOR_WORD_RIGHT},
-      {{KB_MOD_ALT, XKB_KEY_f}, KB_ACTION_CURSOR_WORD_RIGHT},
-      {{0, XKB_KEY_Home}, KB_ACTION_CURSOR_START},
-      {{KB_MOD_CTRL, XKB_KEY_a}, KB_ACTION_CURSOR_START},
-      {{0, XKB_KEY_End}, KB_ACTION_CURSOR_END},
-      {{KB_MOD_CTRL, XKB_KEY_e}, KB_ACTION_CURSOR_END},
-
-      {{0, XKB_KEY_Return}, KB_ACTION_MATCH_EXEC},
-      {{0, XKB_KEY_KP_Enter}, KB_ACTION_MATCH_EXEC},
-      {{KB_MOD_CTRL, XKB_KEY_n}, KB_ACTION_MATCH_NEXT},
-      {{0, XKB_KEY_Down}, KB_ACTION_MATCH_NEXT},
-      {{0, XKB_KEY_Tab}, KB_ACTION_MATCH_NEXT},
-      {{KB_MOD_CTRL, XKB_KEY_p}, KB_ACTION_MATCH_PREV},
-      {{0, XKB_KEY_Up}, KB_ACTION_MATCH_PREV},
-      {{KB_MOD_SHIFT, XKB_KEY_ISO_Left_Tab}, KB_ACTION_MATCH_PREV},
-  };
-  return LIST_APPEND(&cfg->binds, defaults,
-                     sizeof defaults / sizeof defaults[0]) &&
-         load_default_ui(&cfg->ui);
 }
 
 bool config_default_path(StrBuf* out) {
@@ -281,142 +234,129 @@ static void set_color(struct config_colors* c,
   PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [colors]", STR_ARG(key));
 }
 
-static bool parse_action(Str v, enum kb_action* out) {
-  static const struct {
-    const char* name;
-    enum kb_action action;
-  } names[] = {
-      {"cancel", KB_ACTION_CANCEL},
-      {"delete-prev", KB_ACTION_DELETE_PREV},
-      {"delete-prev-word", KB_ACTION_DELETE_PREV_WORD},
-      {"delete-next", KB_ACTION_DELETE_NEXT},
-      {"delete-next-word", KB_ACTION_DELETE_NEXT_WORD},
-      {"delete-line-start", KB_ACTION_DELETE_LINE_START},
-      {"delete-line-end", KB_ACTION_DELETE_LINE_END},
-      {"delete-line", KB_ACTION_DELETE_LINE},
-      {"cursor-left", KB_ACTION_CURSOR_LEFT},
-      {"cursor-right", KB_ACTION_CURSOR_RIGHT},
-      {"cursor-word-left", KB_ACTION_CURSOR_WORD_LEFT},
-      {"cursor-word-right", KB_ACTION_CURSOR_WORD_RIGHT},
-      {"cursor-start", KB_ACTION_CURSOR_START},
-      {"cursor-end", KB_ACTION_CURSOR_END},
-      {"match-exec", KB_ACTION_MATCH_EXEC},
-      {"match-next", KB_ACTION_MATCH_NEXT},
-      {"match-prev", KB_ACTION_MATCH_PREV},
-  };
-  for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
-    if (str_eq_cstr(v, names[i].name)) {
-      *out = names[i].action;
-      return true;
-    }
+static const struct {
+  const char* name;
+  enum action_kind kind;
+  bool takes_arg;
+} action_names[] = {
+    {"cancel", ACTION_CANCEL, false},
+    {"delete-prev", ACTION_DELETE_PREV, false},
+    {"delete-prev-word", ACTION_DELETE_PREV_WORD, false},
+    {"delete-next", ACTION_DELETE_NEXT, false},
+    {"delete-next-word", ACTION_DELETE_NEXT_WORD, false},
+    {"delete-line-start", ACTION_DELETE_LINE_START, false},
+    {"delete-line-end", ACTION_DELETE_LINE_END, false},
+    {"delete-line", ACTION_DELETE_LINE, false},
+    {"cursor-left", ACTION_CURSOR_LEFT, false},
+    {"cursor-right", ACTION_CURSOR_RIGHT, false},
+    {"cursor-word-left", ACTION_CURSOR_WORD_LEFT, false},
+    {"cursor-word-right", ACTION_CURSOR_WORD_RIGHT, false},
+    {"cursor-start", ACTION_CURSOR_START, false},
+    {"cursor-end", ACTION_CURSOR_END, false},
+    {"match-exec", ACTION_MATCH_EXEC, false},
+    {"match-next", ACTION_MATCH_NEXT, false},
+    {"match-prev", ACTION_MATCH_PREV, false},
+    {"change-prompt", ACTION_CHANGE_PROMPT, true},
+    {"change-query", ACTION_CHANGE_QUERY, true},
+    {"reload", ACTION_RELOAD, true},
+    {"execute", ACTION_EXECUTE, true},
+};
+
+/* The closing delimiter for an argument opened with c, or 0. */
+static char arg_closer(char c) {
+  switch (c) {
+    case '(':
+      return ')';
+    case '[':
+      return ']';
+    case '{':
+      return '}';
+    case '<':
+      return '>';
+    default:
+      return 0;
   }
-  return false;
 }
 
-/* Mod+...+Keysym, e.g. Control+Shift+n. Mods are case-insensitive; the keysym
- * is an xkb name, matched exactly first and then ignoring case. The result is
- * normalized to what the keyboard reports: Shift+n is {SHIFT, N}, and an
- * uppercase keysym implies Shift. */
-static bool parse_keypress(Str v, struct kb_keypress* out) {
-  static const struct {
-    const char* name;
-    uint32_t mod;
-  } mods[] = {
-      {"control", KB_MOD_CTRL}, {"ctrl", KB_MOD_CTRL},  {"shift", KB_MOD_SHIFT},
-      {"alt", KB_MOD_ALT},      {"mod1", KB_MOD_ALT},   {"super", KB_MOD_SUPER},
-      {"logo", KB_MOD_SUPER},   {"mod4", KB_MOD_SUPER},
-  };
-
-  Str mod_part, sym_part;
-  if (!str_cut_last(v, STR("+"), &mod_part, &sym_part)) {
-    mod_part = STR("");
-    sym_part = v;
-  }
-
-  uint32_t mask = 0;
-  if (mod_part.len > 0) {
-    StrSplit it = str_split(mod_part, STR("+"));
-    Str name;
-    while (str_split_next(&it, &name)) {
-      size_t i = 0;
-      while (i < sizeof mods / sizeof mods[0] &&
-             !str_eq_nocase(name, str_from_cstr(mods[i].name)))
-        i++;
-      if (i == sizeof mods / sizeof mods[0])
-        return false;
-      mask |= mods[i].mod;
-    }
-  }
-
-  /* xkb wants a NUL-terminated name; keysym names are short. */
-  char buf[64];
-  if (sym_part.len == 0 || sym_part.len >= sizeof buf)
-    return false;
-  memcpy(buf, sym_part.ptr, sym_part.len);
-  buf[sym_part.len] = '\0';
-  xkb_keysym_t sym = xkb_keysym_from_name(buf, XKB_KEYSYM_NO_FLAGS);
-  if (sym == XKB_KEY_NoSymbol)
-    sym = xkb_keysym_from_name(buf, XKB_KEYSYM_CASE_INSENSITIVE);
-  if (sym == XKB_KEY_NoSymbol)
-    return false;
-
-  if (xkb_keysym_to_lower(sym) != sym)
-    mask |= KB_MOD_SHIFT;
-  if (mask & KB_MOD_SHIFT) {
-    sym = sym == XKB_KEY_Tab ? XKB_KEY_ISO_Left_Tab : xkb_keysym_to_upper(sym);
-  }
-
-  *out = (struct kb_keypress){.mods = mask, .sym = sym};
-  return true;
-}
-
-/* action = Key [Key ...] replaces every bind of that action, so it drops the
- * defaults for it; "none" leaves the action unbound. Returns false on
+/* action[+action...], each action a name optionally followed by an argument
+ * in (), [], {} or <>; or none. Fills out, whose arguments are copied into
+ * arena. Returns 1, 0 if val is malformed (having warned), or -1 on
  * allocation failure. */
-static bool set_key(ConfigBindList* binds,
+static int parse_actions(Arena* arena,
+                         const struct loc* loc,
+                         Str val,
+                         ActionList* out) {
+  if (str_eq_nocase(val, STR("none")))
+    return 1;
+  if (val.len == 0) {
+    PARSE_WARN(loc, "%s", "expected actions, or none");
+    return 0;
+  }
+
+  Str rest = val;
+  for (;;) {
+    size_t i = 0;
+    while (i < rest.len && rest.ptr[i] != '+' && !arg_closer(rest.ptr[i]))
+      i++;
+    Str name = str_trim(str_slice(rest, 0, i));
+    rest = str_slice(rest, i, rest.len);
+
+    size_t n = 0;
+    while (n < sizeof action_names / sizeof action_names[0] &&
+           !str_eq_cstr(name, action_names[n].name))
+      n++;
+    if (n == sizeof action_names / sizeof action_names[0]) {
+      PARSE_WARN(loc, "unknown action \"" STR_FMT "\"", STR_ARG(name));
+      return 0;
+    }
+
+    struct action a = {.kind = action_names[n].kind, .arg = STR("")};
+    char closer = rest.len > 0 ? arg_closer(rest.ptr[0]) : 0;
+    if (closer) {
+      size_t end = str_find_char(rest, closer);
+      if (end == STR_NPOS) {
+        PARSE_WARN(loc, "missing '%c' after " STR_FMT, closer, STR_ARG(name));
+        return 0;
+      }
+      a.arg = str_arena_dup(arena, str_slice(rest, 1, end));
+      if (a.arg.ptr == NULL)
+        return -1;
+      rest = str_slice(rest, end + 1, rest.len);
+    }
+    if (action_names[n].takes_arg != (closer != 0)) {
+      PARSE_WARN(loc, STR_FMT " %s", STR_ARG(name),
+                 closer ? "takes no argument" : "needs an argument");
+      return 0;
+    }
+    if (!LIST_PUSH(out, a))
+      return -1;
+
+    rest = str_trim_left(rest);
+    if (rest.len == 0)
+      return 1;
+    if (rest.ptr[0] != '+') {
+      PARSE_WARN(loc, "expected '+' after " STR_FMT, STR_ARG(name));
+      return 0;
+    }
+    rest = str_slice(rest, 1, rest.len);
+  }
+}
+
+/* Key = actions binds the key, replacing what it did before. A malformed
+ * line leaves it as it was. Returns false on allocation failure. */
+static bool set_key(struct config* cfg,
                     const struct loc* loc,
                     Str key,
                     Str val) {
-  enum kb_action action;
-  if (!parse_action(key, &action)) {
-    PARSE_WARN(loc, "unknown action \"" STR_FMT "\" in [keys]", STR_ARG(key));
+  struct config_bind b = {.actions = LIST_INIT_ARENA(&cfg->arena)};
+  if (!kb_parse_keypress(key, &b.key)) {
+    PARSE_WARN(loc, "bad key \"" STR_FMT "\" in [keys]", STR_ARG(key));
     return true;
   }
-
-  bool none = str_eq_nocase(val, STR("none"));
-  if (!none) {
-    /* Check every key first so a typo doesn't drop the existing binds. */
-    Str rest = val, field;
-    struct kb_keypress kp;
-    if (val.len == 0) {
-      PARSE_WARN(loc, STR_FMT " needs at least one key, or none", STR_ARG(key));
-      return true;
-    }
-    while (str_next_field(&rest, &field)) {
-      if (!parse_keypress(field, &kp)) {
-        PARSE_WARN(loc, "bad key \"" STR_FMT "\"", STR_ARG(field));
-        return true;
-      }
-    }
-  }
-
-  size_t kept = 0;
-  for (size_t i = 0; i < binds->len; i++) {
-    if (binds->ptr[i].action != action)
-      binds->ptr[kept++] = binds->ptr[i];
-  }
-  LIST_TRUNCATE(binds, kept);
-
-  if (none)
-    return true;
-  Str rest = val, field;
-  while (str_next_field(&rest, &field)) {
-    struct config_bind b = {.action = action};
-    parse_keypress(field, &b.key);
-    if (!LIST_PUSH(binds, b))
-      return false;
-  }
-  return true;
+  int ret = parse_actions(&cfg->arena, loc, val, &b.actions);
+  if (ret <= 0)
+    return ret == 0;
+  return LIST_PUSH(&cfg->binds, b);
 }
 
 enum section { SECTION_NONE, SECTION_MAIN, SECTION_COLORS, SECTION_KEYS };
@@ -455,7 +395,7 @@ static bool set_value(struct config* cfg,
       set_color(&cfg->ui.colors, loc, key, val);
       break;
     case SECTION_KEYS:
-      return set_key(&cfg->binds, loc, key, val);
+      return set_key(cfg, loc, key, val);
   }
   return true;
 }
@@ -546,4 +486,58 @@ int config_load_file(struct config* cfg, const char* path) {
   }
   sb_free(&text);
   return ret;
+}
+
+bool config_load_defaults(struct config* cfg) {
+  static const struct {
+    const char* key;
+    const char* actions;
+  } defaults[] = {
+      {"Escape", "cancel"},
+      {"Control+g", "cancel"},
+
+      {"BackSpace", "delete-prev"},
+      {"Shift+BackSpace", "delete-prev"},
+      {"Control+h", "delete-prev"},
+      {"Control+w", "delete-prev-word"},
+      {"Control+BackSpace", "delete-prev-word"},
+      {"Alt+BackSpace", "delete-prev-word"},
+      {"Delete", "delete-next"},
+      {"KP_Delete", "delete-next"},
+      {"Control+d", "delete-next"},
+      {"Control+Delete", "delete-next-word"},
+      {"Alt+d", "delete-next-word"},
+      {"Control+k", "delete-line-end"},
+      {"Control+u", "delete-line-start"},
+
+      {"Left", "cursor-left"},
+      {"Control+b", "cursor-left"},
+      {"Right", "cursor-right"},
+      {"Control+f", "cursor-right"},
+      {"Control+Left", "cursor-word-left"},
+      {"Alt+b", "cursor-word-left"},
+      {"Control+Right", "cursor-word-right"},
+      {"Alt+f", "cursor-word-right"},
+      {"Home", "cursor-start"},
+      {"Control+a", "cursor-start"},
+      {"End", "cursor-end"},
+      {"Control+e", "cursor-end"},
+
+      {"Return", "match-exec"},
+      {"KP_Enter", "match-exec"},
+      {"Control+n", "match-next"},
+      {"Down", "match-next"},
+      {"Tab", "match-next"},
+      {"Control+p", "match-prev"},
+      {"Up", "match-prev"},
+      {"Shift+Tab", "match-prev"},
+  };
+  struct loc loc = {.path = "defaults"};
+  for (size_t i = 0; i < sizeof defaults / sizeof defaults[0]; i++) {
+    loc.line = i + 1;
+    if (!set_key(cfg, &loc, str_from_cstr(defaults[i].key),
+                 str_from_cstr(defaults[i].actions)))
+      return false;
+  }
+  return load_default_ui(&cfg->ui);
 }

@@ -1,16 +1,19 @@
 #ifndef LM_CONFIG_H
 #define LM_CONFIG_H
 
+#include "action.h"
 #include "kb.h"
+#include "ztd_arena.h"
 #include "ztd_arr.h"
 #include "ztd_str.h"
 
 #include <stdbool.h>
 #include <stddef.h>
 
+/* A key and the actions it runs, in order; none means it is unbound. */
 struct config_bind {
   struct kb_keypress key;
-  enum kb_action action;
+  ActionList actions;  // lives in the config arena
 };
 
 typedef LIST(struct config_bind) ConfigBindList;
@@ -56,6 +59,7 @@ struct config_ui {
 };
 
 struct config {
+  Arena arena;           // owns the binds' action lists and arguments
   ConfigBindList binds;  // Binds are applied in order, so a later bind for the
                          // same key overrides an earlier one.
   struct config_ui ui;
@@ -82,7 +86,13 @@ bool config_default_path(StrBuf* out);
  *   [colors]
  *   background = #1e1e2ef0
  *   [keys]
- *   match-next = Down Tab Control+n
+ *   Control+n = match-next
+ *   Control+r = change-prompt(> )+reload(ls ~)
+ *   Control+g = none
+ *
+ * Each [keys] line binds one key (see kb_parse_keypress) to a list of
+ * actions joined by '+', run in order; "none" unbinds it. Actions taking an
+ * argument wrap it in (), [], {} or <>, ending at the first closing one.
  *
  * Values may be wrapped in double quotes to keep surrounding spaces. Bad
  * lines are skipped with a warning. Returns 0, 1 if the file doesn't exist,

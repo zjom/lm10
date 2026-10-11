@@ -114,6 +114,14 @@ bool state_push(struct state* state,
   return true;
 }
 
+void state_clear_entries(struct state* state) {
+  arena_reset(&state->arena);
+  state->entries = (StateEntryList)LIST_INIT_ARENA(&state->arena);
+  LIST_CLEAR(&state->matches);
+  state->selected = 0;
+  state->gen++;
+}
+
 static bool is_cont(char c) {
   return ((unsigned char)c & 0xC0) == 0x80;  // UTF-8 continuation byte
 }
@@ -187,6 +195,12 @@ bool state_query_clear(struct state* state) {
   sb_clear(&state->query);
   state->cursor = 0;
   return refilter(state);
+}
+
+bool state_query_set(struct state* state, Str text) {
+  sb_clear(&state->query);
+  state->cursor = 0;
+  return state_query_insert(state, text);
 }
 
 void state_cursor_move(struct state* state, enum state_motion motion) {

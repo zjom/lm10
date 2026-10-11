@@ -8,7 +8,9 @@
  * Build:
  * meson setup bld/debug && ninja -C bld/debug
  *
- * The look is set in ~/.config/lm10/lm10.ini (or -c PATH); see config.h.
+ * The look and the keys are set in ~/.config/lm10/lm10.ini (or -c PATH); see
+ * config.h. A key runs a list of actions, e.g. Control+r =
+ * change-prompt(> )+reload(ls ~) swaps the prompt and the entries.
  * -o [SECTION.]KEY=VALUE overrides a single key, e.g. -o colors.text=#ffffff.
  *
  * Run inside a Wayland session (GNOME, KDE, Sway, ...):
@@ -28,6 +30,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "action.h"
 #include "common.h"
 #include "config.h"
 #include "fdm.h"
@@ -84,43 +87,27 @@ static void set_activation_env(const char* xdg_activation_token) {
   }
 }
 
-/* Writes s to f, single-quoted unless it is made only of characters no shell
- * treats specially. */
-static void print_quoted(FILE* f, Str s) {
-  static const char safe[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-      "0123456789@%+=:,./_-";
-  /* s is NUL-terminated, so strspn stops at its end at the latest */
-  bool plain = s.len > 0 && strspn(s.ptr, safe) == s.len;
-  if (plain) {
-    fwrite(s.ptr, 1, s.len, f);
-    return;
-  }
-  fputc('\'', f);
-  for (size_t i = 0; i < s.len; i++) {
-    if (s.ptr[i] == '\'')
-      fputs("'\\''", f);
-    else
-      fputc(s.ptr[i], f);
-  }
-  fputc('\'', f);
-}
-
 /* Prints the entry's argv to stdout as one shell-quoted line. Returns false
  * if writing failed. */
 static bool print_entry(const struct state_entry* entry) {
+  StrBuf line = STRBUF_INIT;
   size_t i = 0;
   ARR_FOREACH(const Str, s, &entry->argv) {
     if (i++ > 0)
-      fputc(' ', stdout);
-    print_quoted(stdout, *s);
+      sb_append_char(&line, ' ');
+    action_quote(&line, *s);
   }
-  fputc('\n', stdout);
-  if (fflush(stdout) != 0 || ferror(stdout)) {
+  sb_append_char(&line, '\n');
+  bool ok = !line.failed;
+  if (!ok)
+    LOG_ERROR("allocation failed");
+  else if (fwrite(line.ptr, 1, line.len, stdout) != line.len ||
+           fflush(stdout) != 0) {
     LOG_ERROR("failed to write to stdout: %s", strerror(errno));
-    return false;
+    ok = false;
   }
-  return true;
+  sb_free(&line);
+  return ok;
 }
 
 /* Replaces lm10 with the entry's command, so it keeps lm10's terminal,
@@ -265,8 +252,11 @@ static bool exec_selection(struct app* app, const struct state_entry* entry) {
 }
 
 static bool load_binds(struct kb_manager* kb, const struct config* cfg) {
-  ARR_FOREACH(const struct config_bind, b, &cfg->binds) {
-    if (!kb_load_bind(kb, b->key, b->action))
+  for (size_t i = 0; i < cfg->binds.len; i++) {
+    const struct config_bind* b = &cfg->binds.ptr[i];
+    if (b->actions.len == 0)
+      kb_unload_bind(kb, b->key);
+    else if (!kb_load_bind(kb, b->key, (uint32_t)i))
       return false;
   }
   return true;
@@ -306,73 +296,118 @@ static void on_close(void* data) {
   app->running = false;
 }
 
-static void on_key(void* data, const struct kb_result* key) {
-  struct app* app = data;
+/* Replaces the entries with the output of the action's command. */
+static bool reload(struct app* app, const char* cmd) {
+  input_destroy(&app->input);
+  state_clear_entries(&app->state);
+  return input_init_command(&app->input, &app->fdm, cmd, &app->state,
+                            on_entries, app) == 0;
+}
+
+/* Runs one action. Returns false if the ones after it shouldn't run. */
+static bool run_action(struct app* app, const struct action* a) {
   struct state* st = &app->state;
   bool ok = true;
 
-  switch (key->action) {
-    case KB_ACTION_NONE:
-      ok = state_query_insert(st, str_from_cstr(key->utf8));
-      break;
-    case KB_ACTION_CANCEL:
+  switch (a->kind) {
+    case ACTION_CANCEL:
       app->running = false;
-      return;
-    case KB_ACTION_DELETE_PREV:
+      return false;
+    case ACTION_DELETE_PREV:
       ok = state_query_delete(st, STATE_MOTION_CHAR_LEFT);
       break;
-    case KB_ACTION_DELETE_PREV_WORD:
+    case ACTION_DELETE_PREV_WORD:
       ok = state_query_delete(st, STATE_MOTION_WORD_LEFT);
       break;
-    case KB_ACTION_DELETE_NEXT:
+    case ACTION_DELETE_NEXT:
       ok = state_query_delete(st, STATE_MOTION_CHAR_RIGHT);
       break;
-    case KB_ACTION_DELETE_NEXT_WORD:
+    case ACTION_DELETE_NEXT_WORD:
       ok = state_query_delete(st, STATE_MOTION_WORD_RIGHT);
       break;
-    case KB_ACTION_DELETE_LINE_START:
+    case ACTION_DELETE_LINE_START:
       ok = state_query_delete(st, STATE_MOTION_START);
       break;
-    case KB_ACTION_DELETE_LINE_END:
+    case ACTION_DELETE_LINE_END:
       ok = state_query_delete(st, STATE_MOTION_END);
       break;
-    case KB_ACTION_DELETE_LINE:
+    case ACTION_DELETE_LINE:
       ok = state_query_clear(st);
       break;
-    case KB_ACTION_CURSOR_LEFT:
+    case ACTION_CURSOR_LEFT:
       state_cursor_move(st, STATE_MOTION_CHAR_LEFT);
       break;
-    case KB_ACTION_CURSOR_RIGHT:
+    case ACTION_CURSOR_RIGHT:
       state_cursor_move(st, STATE_MOTION_CHAR_RIGHT);
       break;
-    case KB_ACTION_CURSOR_WORD_LEFT:
+    case ACTION_CURSOR_WORD_LEFT:
       state_cursor_move(st, STATE_MOTION_WORD_LEFT);
       break;
-    case KB_ACTION_CURSOR_WORD_RIGHT:
+    case ACTION_CURSOR_WORD_RIGHT:
       state_cursor_move(st, STATE_MOTION_WORD_RIGHT);
       break;
-    case KB_ACTION_CURSOR_START:
+    case ACTION_CURSOR_START:
       state_cursor_move(st, STATE_MOTION_START);
       break;
-    case KB_ACTION_CURSOR_END:
+    case ACTION_CURSOR_END:
       state_cursor_move(st, STATE_MOTION_END);
       break;
-    case KB_ACTION_MATCH_EXEC: {
+    case ACTION_MATCH_EXEC: {
       const struct state_entry* entry = state_get_selection(st);
-      if (entry != NULL)
-        exec_selection(app, entry);
-      return;
+      if (entry == NULL)
+        return true;
+      exec_selection(app, entry);
+      return false;
     }
-    case KB_ACTION_MATCH_NEXT:
+    case ACTION_MATCH_NEXT:
       state_select_next(st);
       break;
-    case KB_ACTION_MATCH_PREV:
+    case ACTION_MATCH_PREV:
       state_select_prev(st);
       break;
+    case ACTION_CHANGE_PROMPT:
+      sb_clear(&app->config.ui.prompt);
+      ok = sb_append(&app->config.ui.prompt, a->arg);
+      break;
+    case ACTION_CHANGE_QUERY:
+      ok = state_query_set(st, a->arg);
+      break;
+    case ACTION_RELOAD:
+    case ACTION_EXECUTE: {
+      StrBuf cmd = STRBUF_INIT;
+      if (!action_expand(&cmd, a->arg, st)) {
+        LOG_WARN("command allocation failed");
+        sb_free(&cmd);
+        return false;
+      }
+      if (a->kind == ACTION_EXECUTE)
+        action_execute(sb_cstr(&cmd));
+      else if (!reload(app, sb_cstr(&cmd)))
+        ok = false;
+      sb_free(&cmd);
+      return ok;
+    }
   }
   if (!ok)
     LOG_WARN("query allocation failed");
-  render_request(&app->render);
+  return true;
+}
+
+static void on_key(void* data, const struct kb_result* key) {
+  struct app* app = data;
+
+  if (!key->bound) {
+    if (!state_query_insert(&app->state, str_from_cstr(key->utf8)))
+      LOG_WARN("query allocation failed");
+  } else {
+    const ActionList* actions = &app->config.binds.ptr[key->bind].actions;
+    ARR_FOREACH(const struct action, a, actions) {
+      if (!run_action(app, a))
+        break;
+    }
+  }
+  if (app->running)
+    render_request(&app->render);
 }
 
 static const struct wayl_listener wayl_listener = {
@@ -405,8 +440,15 @@ static void usage(FILE* f, const char* argv0) {
           "  -o, --override [SECTION.]KEY=VALUE\n"
           "                     set a config key after the file is read;\n"
           "                     SECTION is main (default), colors or keys,\n"
-          "                     e.g. -o width=40%% -o keys.cancel=Escape\n"
-          "  -h, --help         show this help\n",
+          "                     e.g. -o width=40%% -o keys.Escape=cancel\n"
+
+          "  -h, --help         show this help\n"          "\n"
+          "A key runs actions joined by '+', some taking an argument:\n"
+          "  -o 'keys.Control+r=change-prompt(> )+reload(ls ~)'\n"
+          "change-prompt(T), change-query(T), reload(CMD) and execute(CMD)\n"
+          "join the built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
+          "{N..M} become the selection's command, name, the query and argv\n"
+          "words, shell-quoted.\n",
           argv0);
 }
 

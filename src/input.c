@@ -1,8 +1,11 @@
 #include "input.h"
 
 #include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "json.h"
@@ -110,7 +113,7 @@ static bool parse_line(struct input* in, char* line, size_t len) {
     }
 
     if (str_eq(word, STR("--exec")) || str_eq(word, STR("--detach"))) {
-      LOG_WARN("stdin: option \"%.*s\" takes no value, skipping line",
+      LOG_WARN("%s: option \"%.*s\" takes no value, skipping line", in->name,
                (int)word.len, word.ptr);
       return false;
     } else if (str_eq(word, STR("-n")) || str_eq(word, STR("--name"))) {
@@ -118,14 +121,14 @@ static bool parse_line(struct input* in, char* line, size_t len) {
     } else if (str_eq(word, STR("-i")) || str_eq(word, STR("--icon"))) {
       dst = &icon;
     } else {
-      LOG_WARN("stdin: unknown option \"%.*s\", skipping line", (int)word.len,
-               word.ptr);
+      LOG_WARN("%s: unknown option \"%.*s\", skipping line", in->name,
+               (int)word.len, word.ptr);
       return false;
     }
 
     if (!has_val && !next_word(&p, end, &val, &err)) {
       if (!err) {
-        LOG_WARN("stdin: option \"%.*s\" needs a value, skipping line",
+        LOG_WARN("%s: option \"%.*s\" needs a value, skipping line", in->name,
                  (int)word.len, word.ptr);
         return false;
       }
@@ -141,12 +144,12 @@ static bool parse_line(struct input* in, char* line, size_t len) {
   }
 
   if (err) {
-    LOG_WARN("stdin: unterminated quote or escape, skipping line");
+    LOG_WARN("%s: unterminated quote or escape, skipping line", in->name);
     return false;
   }
   if (in->words.len == 0) {
     if (str_trim(str_from_parts(line, len)).len != 0)
-      LOG_WARN("stdin: line has no command, skipping");
+      LOG_WARN("%s: line has no command, skipping", in->name);
     return false;
   }
 
@@ -255,9 +258,9 @@ static bool json_command(struct input* in,
     for (struct json_array_element_s* el = arr->start; el; el = el->next) {
       if (!json_str(el->value, &word)) {
         LOG_WARN(
-            "stdin:%zu: \"command\" elements must be strings, skipping "
+            "%s:%zu: \"command\" elements must be strings, skipping "
             "entry",
-            json_line(el->value, line));
+            in->name, json_line(el->value, line));
         return false;
       }
       if (!LIST_PUSH(&in->words, word))
@@ -269,9 +272,9 @@ static bool json_command(struct input* in,
   Str cmd;
   if (!json_str(v, &cmd)) {
     LOG_WARN(
-        "stdin:%zu: \"command\" must be a string or an array of "
+        "%s:%zu: \"command\" must be a string or an array of "
         "strings, skipping entry",
-        json_line(v, line));
+        in->name, json_line(v, line));
     return false;
   }
   /* The string lives in json.h's allocation, which is ours to mutate. */
@@ -284,9 +287,9 @@ static bool json_command(struct input* in,
   }
   if (err) {
     LOG_WARN(
-        "stdin:%zu: unterminated quote or escape in \"command\", "
+        "%s:%zu: unterminated quote or escape in \"command\", "
         "skipping entry",
-        json_line(v, line));
+        in->name, json_line(v, line));
     return false;
   }
   return true;
@@ -300,7 +303,7 @@ oom:
 static bool json_entry(struct input* in, struct json_value_s* v, size_t line) {
   struct json_object_s* obj = json_value_as_object(v);
   if (obj == NULL) {
-    LOG_WARN("stdin:%zu: expected an entry object, skipping",
+    LOG_WARN("%s:%zu: expected an entry object, skipping", in->name,
              json_line(v, line));
     return false;
   }
@@ -336,25 +339,26 @@ static bool json_entry(struct input* in, struct json_value_s* v, size_t line) {
         run = STATE_RUN_DETACH;
       } else {
         LOG_WARN(
-            "stdin:%zu: \"run\" must be \"print\", \"exec\" or "
+            "%s:%zu: \"run\" must be \"print\", \"exec\" or "
             "\"detach\", skipping entry",
-            at);
+            in->name, at);
         return false;
       }
     } else {
-      LOG_WARN("stdin:%zu: unknown key \"" STR_FMT "\", ignoring", at,
+      LOG_WARN("%s:%zu: unknown key \"" STR_FMT "\", ignoring", in->name, at,
                STR_ARG(key));
     }
     continue;
 
   not_string:
-    LOG_WARN("stdin:%zu: \"" STR_FMT "\" must be a string, skipping entry", at,
-             STR_ARG(key));
+    LOG_WARN("%s:%zu: \"" STR_FMT "\" must be a string, skipping entry",
+             in->name, at, STR_ARG(key));
     return false;
   }
 
   if (in->words.len == 0) {
-    LOG_WARN("stdin:%zu: entry has no command, skipping", json_line(v, line));
+    LOG_WARN("%s:%zu: entry has no command, skipping", in->name,
+             json_line(v, line));
     return false;
   }
   if (!state_push(in->state, name, &in->words, icon, run)) {
@@ -375,7 +379,7 @@ static bool json_value(struct input* in,
   struct json_value_s* root =
       json_parse_ex(src, len, JSON_FLAGS, NULL, NULL, &res);
   if (root == NULL) {
-    LOG_WARN("stdin:%zu: %s, skipping", line + res.error_line_no - 1,
+    LOG_WARN("%s:%zu: %s, skipping", in->name, line + res.error_line_no - 1,
              json_strerror(res.error));
     return false;
   }
@@ -395,7 +399,8 @@ static bool json_value(struct input* in,
 /* Warns once per run of bytes that can't start a value. */
 static void json_stray(struct input* in) {
   if (!in->json.stray)
-    LOG_WARN("stdin:%zu: expected an entry object, skipping", in->json.line);
+    LOG_WARN("%s:%zu: expected an entry object, skipping", in->name,
+             in->json.line);
   in->json.stray = true;
 }
 
@@ -499,7 +504,7 @@ static bool drain_json(struct input* in, bool at_eof) {
 out:
 
   if (at_eof && (s->depth > 0 || s->in_array))
-    LOG_WARN("stdin:%zu: unexpected end of input, skipping",
+    LOG_WARN("%s:%zu: unexpected end of input, skipping", in->name,
              s->depth > 0 ? s->start_line : s->line);
 
   /* Drop what has been consumed, keeping a value still being read. */
@@ -549,10 +554,20 @@ static bool drain(struct input* in, bool at_eof) {
   }
 }
 
-static void stop(struct input* in) {
+/* Stops reading; at_eof says the command, if any, is done writing, so it is
+ * waited for rather than killed. */
+static void stop(struct input* in, bool at_eof) {
   if (in->fd == -1)
     return;
   fdm_remove(in->fdm, (uint32_t)in->fd);
+  if (in->pid > 0) {
+    close(in->fd);
+    if (!at_eof)
+      kill(-in->pid, SIGTERM); /* its process group: sh and its children */
+    while (waitpid(in->pid, NULL, 0) == -1 && errno == EINTR)
+      ;
+    in->pid = -1;
+  }
   in->fd = -1;
   sb_free(&in->buf);
   LIST_FREE(&in->words);
@@ -565,13 +580,13 @@ static bool read_some(struct input* in, bool* pushed) {
   if (n == -1) {
     if (errno == EINTR || errno == EAGAIN)
       return true;
-    LOG_WARN("stdin: read failed: %s", strerror(errno));
+    LOG_WARN("%s: read failed: %s", in->name, strerror(errno));
   } else if (n > 0) {
     if (sb_append(&in->buf, str_from_parts(chunk, (size_t)n))) {
       *pushed |= drain(in, false);
       return true;
     }
-    LOG_WARN("stdin: allocation failed");
+    LOG_WARN("%s: allocation failed", in->name);
   }
   *pushed |= drain(in, true);
   return false;
@@ -584,7 +599,7 @@ static int32_t on_readable(struct fdm* fdm, void* data) {
   /* Level-triggered, so one read per wakeup: never blocks, and fd stays in
    * whatever blocking mode it was handed to us in. */
   if (!read_some(in, &pushed))
-    stop(in);
+    stop(in, true);
   if (pushed && in->on_change)
     in->on_change(in->data);
   return 0;
@@ -597,8 +612,10 @@ int input_init(struct input* in,
                void (*on_change)(void* data),
                void* data) {
   *in = (struct input){
+      .name = "stdin",
       .fdm = fdm,
       .fd = fd,
+      .pid = -1,
       .buf = STRBUF_INIT,
       .words = LIST_INIT,
       .json = {.line = 1},
@@ -628,6 +645,63 @@ int input_init(struct input* in,
   return 0;
 }
 
+int input_init_command(struct input* in,
+                       struct fdm* fdm,
+                       const char* cmd,
+                       struct state* state,
+                       void (*on_change)(void* data),
+                       void* data) {
+  int fds[2];
+  if (pipe2(fds, O_CLOEXEC) == -1) {
+    LOG_ERROR("reload: failed to create pipe: %s", strerror(errno));
+    return -1;
+  }
+
+  pid_t pid = fork();
+  if (pid == -1) {
+    LOG_ERROR("reload: fork failed: %s", strerror(errno));
+    close(fds[0]);
+    close(fds[1]);
+    return -1;
+  }
+  if (pid == 0) {
+    /* Its own process group, so stop() can kill whatever it started. */
+    setpgid(0, 0);
+    int devnull = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    if (devnull == -1 || dup2(devnull, STDIN_FILENO) == -1 ||
+        dup2(fds[1], STDOUT_FILENO) == -1)
+      _exit(127);
+    execl("/bin/sh", "sh", "-c", cmd, (char*)NULL);
+    _exit(127);
+  }
+  setpgid(pid, pid); /* as the child does, whichever runs first */
+  close(fds[1]);
+
+  *in = (struct input){
+      .name = "reload",
+      .fdm = fdm,
+      .fd = fds[0],
+      .pid = pid,
+      .buf = STRBUF_INIT,
+      .words = LIST_INIT,
+      .json = {.line = 1},
+      .state = state,
+      .on_change = on_change,
+      .data = data,
+  };
+  if (fdm_add(fdm, (uint32_t)fds[0], EPOLLIN, in, on_readable, 0) != 0) {
+    LOG_ERROR("reload: failed to watch output: %s", strerror(errno));
+    close(fds[0]);
+    kill(-pid, SIGTERM);
+    while (waitpid(pid, NULL, 0) == -1 && errno == EINTR)
+      ;
+    in->fd = -1;
+    in->pid = -1;
+    return -1;
+  }
+  return 0;
+}
+
 void input_destroy(struct input* in) {
-  stop(in);
+  stop(in, false);
 }

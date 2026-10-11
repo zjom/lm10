@@ -7,6 +7,7 @@
 #include "ztd_str.h"
 
 #include <stdbool.h>
+#include <sys/types.h>
 
 /* Which syntax the input is in, picked from its first non-blank byte. */
 enum input_format {
@@ -67,8 +68,10 @@ struct input_json {
  * Unknown keys are ignored with a warning; malformed values are skipped with
  * one, each element of a top-level array on its own. */
 struct input {
+  const char* name;  // where the entries come from, for warnings
   struct fdm* fdm;
-  int fd;  // -1 once EOF or an error has been reached
+  int fd;     // -1 once EOF or an error has been reached
+  pid_t pid;  // the command writing to fd, which is ours; or -1
   enum input_format format;
   StrBuf buf;     // heap-backed; bytes read but not yet a complete entry
   StrList words;  // heap-backed scratch; the current entry's command words
@@ -86,6 +89,16 @@ int input_init(struct input* in,
                struct state* state,
                void (*on_change)(void* data),
                void* data);
+/* Like input_init, reading the output of sh -c cmd. Its stdin is
+ * /dev/null. */
+int input_init_command(struct input* in,
+                       struct fdm* fdm,
+                       const char* cmd,
+                       struct state* state,
+                       void (*on_change)(void* data),
+                       void* data);
+
+/* Stops reading. A command that is still running is killed. */
 void input_destroy(struct input* in);
 
 #endif  // !LM_INPUT_H

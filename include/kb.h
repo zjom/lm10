@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "ztd_str.h"
+
 #include <xkbcommon/xkbcommon.h>
 
 struct kb_manager;
@@ -17,30 +19,6 @@ enum kb_mod {
   KB_MOD_SUPER = 1 << 3,
 };
 
-enum kb_action {
-  KB_ACTION_NONE,
-  KB_ACTION_CANCEL,
-
-  KB_ACTION_DELETE_PREV,
-  KB_ACTION_DELETE_PREV_WORD,
-  KB_ACTION_DELETE_NEXT,
-  KB_ACTION_DELETE_NEXT_WORD,
-  KB_ACTION_DELETE_LINE_START,
-  KB_ACTION_DELETE_LINE_END,
-  KB_ACTION_DELETE_LINE,
-
-  KB_ACTION_CURSOR_LEFT,
-  KB_ACTION_CURSOR_RIGHT,
-  KB_ACTION_CURSOR_WORD_LEFT,
-  KB_ACTION_CURSOR_WORD_RIGHT,
-  KB_ACTION_CURSOR_START,
-  KB_ACTION_CURSOR_END,
-
-  KB_ACTION_MATCH_EXEC,
-  KB_ACTION_MATCH_NEXT,
-  KB_ACTION_MATCH_PREV,
-};
-
 /* sym is the shifted keysym (Shift+n is XKB_KEY_N), mods a mask of kb_mod. */
 struct kb_keypress {
   uint32_t mods;
@@ -51,21 +29,30 @@ struct kb_keypress {
 struct kb_manager* kb_manager_new(void);
 void kb_manager_destroy(struct kb_manager*);
 
-/* Returns false on allocation failure. */
+/* Mod+...+Keysym, e.g. Control+Shift+n. Mods are Control (Ctrl), Shift,
+ * Alt (Mod1) and Super (Logo, Mod4), case-insensitive; the keysym is an xkb
+ * name, matched exactly first and then ignoring case. The result is
+ * normalized to what the keyboard reports: Shift+n is {SHIFT, N}, and an
+ * uppercase keysym implies Shift. Returns false if s isn't a key. */
+bool kb_parse_keypress(Str s, struct kb_keypress* out);
+
+/* Binds lhs to bind, an index the caller gives meaning to. Returns false on
+ * allocation failure. */
 bool kb_load_bind(struct kb_manager* mgr,
                   struct kb_keypress lhs,
-                  enum kb_action rhs);
+                  uint32_t bind);
 void kb_unload_bind(struct kb_manager* mgr, struct kb_keypress lhs);
 
-/* Either a bound action, or (action == KB_ACTION_NONE) text to insert; both
- * empty means the key is ignored. utf8 is NUL-terminated. */
+/* Either a bound key (bound, with its bind index), or text to insert; neither
+ * means the key is ignored. utf8 is NUL-terminated. */
 struct kb_result {
-  enum kb_action action;
+  bool bound;
+  uint32_t bind;
   char utf8[8];
 };
 
-struct kb_result kb_get_action(struct kb_manager* mgr,
-                               uint32_t mods,
-                               xkb_keysym_t sym);
+struct kb_result kb_lookup(struct kb_manager* mgr,
+                           uint32_t mods,
+                           xkb_keysym_t sym);
 
 #endif  // !LM_KB_H

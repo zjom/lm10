@@ -205,8 +205,8 @@ static void seat_emit_key(struct seat* seat, xkb_keycode_t keycode) {
 
   struct wayl* w = seat->wayl;
   struct kb_result r =
-      kb_get_action(w->kb, mods, xkb_state_key_get_one_sym(st, keycode));
-  if (r.action == KB_ACTION_NONE && r.utf8[0] == '\0')
+      kb_lookup(w->kb, mods, xkb_state_key_get_one_sym(st, keycode));
+  if (!r.bound && r.utf8[0] == '\0')
     return;
   w->listener->key(w->data, &r);
 }
