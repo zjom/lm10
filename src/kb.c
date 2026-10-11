@@ -1,37 +1,9 @@
 #include "kb.h"
-#include "ztd_arena.h"
-#include "ztd_map.h"
 
-#include <stdlib.h>
 #include <string.h>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon-names.h>
-
-/* Hashed bytewise: struct kb_keypress has no padding. */
-typedef MAP(struct kb_keypress, uint32_t) KeybindMap;
-
-struct kb_manager {
-  Arena arena;
-  KeybindMap binds;
-};
-
-struct kb_manager* kb_manager_new(void) {
-  struct kb_manager* mgr = calloc(1, sizeof(struct kb_manager));
-  if (mgr == NULL)
-    return NULL;
-  /* The map keeps a pointer to the arena, so it must be the one in mgr. */
-  mgr->arena = (Arena)ARENA_INIT;
-  mgr->binds = (KeybindMap)MAP_INIT_ARENA(&mgr->arena);
-  return mgr;
-}
-
-void kb_manager_destroy(struct kb_manager* mgr) {
-  if (mgr == NULL)
-    return;
-  arena_free(&mgr->arena);
-  free(mgr);
-}
 
 static bool has_shifted_form(xkb_keysym_t sym) {
   return sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab ||
@@ -93,27 +65,6 @@ bool kb_parse_keypress(Str s, struct kb_keypress* out) {
   return true;
 }
 
-bool kb_load_bind(struct kb_manager* mgr,
-                  struct kb_keypress lhs,
-                  uint32_t bind) {
-  return MAP_PUT(&mgr->binds, lhs, bind);
-}
-
-void kb_unload_bind(struct kb_manager* mgr, struct kb_keypress lhs) {
-  MAP_REMOVE(&mgr->binds, lhs);
-}
-
-static bool lookup(struct kb_manager* mgr,
-                   struct kb_keypress key,
-                   struct kb_result* out) {
-  const uint32_t* bind = MAP_GET(&mgr->binds, key);
-  if (bind == NULL)
-    return false;
-  out->bound = true;
-  out->bind = *bind;
-  return true;
-}
-
 /* Text that may go into the query: no control characters. */
 static bool is_text(const char* s) {
   if (s[0] == '\0')
@@ -126,9 +77,7 @@ static bool is_text(const char* s) {
   return true;
 }
 
-struct kb_result kb_resolve(struct kb_manager* mgr,
-                            struct xkb_state* state,
-                            xkb_keycode_t key) {
+struct kb_result kb_resolve(struct xkb_state* state, xkb_keycode_t key) {
   static const struct {
     const char* name;
     uint32_t mod;
@@ -167,15 +116,14 @@ struct kb_result kb_resolve(struct kb_manager* mgr,
                                 : xkb_keysym_to_lower(sym);
 
   struct kb_keypress first = kb_normalize(unconsumed, sym);
-  if (sym != XKB_KEY_NoSymbol && lookup(mgr, first, &r))
-    return r;
+  if (sym != XKB_KEY_NoSymbol)
+    r.keys[r.n_keys++] = first;
 
   const xkb_keysym_t* base;
   if (xkb_keymap_key_get_syms_by_level(keymap, key, 0, 0, &base) == 1) {
     struct kb_keypress second = kb_normalize(active, base[0]);
-    if ((second.mods != first.mods || second.sym != first.sym) &&
-        lookup(mgr, second, &r))
-      return r;
+    if (second.mods != first.mods || second.sym != first.sym)
+      r.keys[r.n_keys++] = second;
   }
 
   if (unconsumed & (KB_MOD_CTRL | KB_MOD_ALT | KB_MOD_SUPER))

@@ -23,16 +23,14 @@ struct wayl_listener {
   /* The compositor's preferred scale for the surface changed, in 120ths
    * (120 = 1x). Sizes passed to size/configure stay logical. */
   void (*scale)(void* data, uint32_t scale120);
-  /* Key press, and again for each repeat, already resolved by the kb
-   * manager. Ignored keys are not reported. */
+  /* Key press, and again for each repeat, resolved by kb_resolve. Keys
+   * with neither a keysym nor text are not reported. */
   void (*key)(void* data, const struct kb_result* key);
 };
 
 /* Connects, binds the globals, creates the layer surface (namespace is its
- * layer-shell namespace) and registers the display fd with fdm. kb resolves
- * keys and must outlive the wayl. Returns NULL on failure (logged). */
+ * layer-shell namespace) and registers the display fd with fdm. Returns NULL on failure (logged). */
 struct wayl* wayl_new(struct fdm* fdm,
-                      struct kb_manager* kb,
                       const struct wayl_listener* listener,
                       void* data,
                       const char* namespace);

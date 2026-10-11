@@ -535,6 +535,22 @@ int config_load_file(struct config* cfg, const char* path) {
   return ret;
 }
 
+const struct config_bind* config_find_bind(const struct config* cfg,
+                                           const struct kb_result* key) {
+  for (size_t k = 0; k < key->n_keys; k++) {
+    struct kb_keypress kp = key->keys[k];
+    for (size_t i = cfg->binds.len; i-- > 0;) {
+      const struct config_bind* b = &cfg->binds.ptr[i];
+      if (b->key.mods == kp.mods && b->key.sym == kp.sym) {
+        if (b->actions.len > 0)
+          return b;
+        break;  // unbound: try the next keypress
+      }
+    }
+  }
+  return NULL;
+}
+
 void config_load_defaults(struct config* cfg) {
   static const struct {
     const char* key;

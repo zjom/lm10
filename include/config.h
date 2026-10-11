@@ -151,6 +151,11 @@ void config_set_colors(struct config* cfg, const char* list);
 /* --bind KEY=ACTIONS binds a key as a [keys] line does. */
 void config_set_bind(struct config* cfg, const char* arg);
 
+/* The bind for one of key's keypresses, trying them in order: for each, the
+ * last bind for it wins. NULL if none is bound, or bound to none. */
+const struct config_bind* config_find_bind(const struct config* cfg,
+                                           const struct kb_result* key);
+
 /* Sets dst to s with each \n turned into a line break, as headers are
  * written. */
 void config_unescape(StrBuf* dst, Str s);

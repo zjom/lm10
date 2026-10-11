@@ -1,4 +1,5 @@
 #include "kb.h"
+#include "config.h"
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon-names.h>
@@ -67,7 +68,7 @@ struct kbd {
   struct xkb_context* ctx;
   struct xkb_keymap* keymap;
   struct xkb_state* state;
-  struct kb_manager* mgr;
+  struct config cfg;
 };
 
 static uint32_t mask(struct kbd* k, int mods) {
@@ -86,14 +87,21 @@ static struct kb_result press(struct kbd* k, int mods, int group, int key) {
                   : 0;
   xkb_state_update_mask(k->state, mask(k, mods), 0, lock, 0, 0,
                         (xkb_layout_index_t)group);
-  return kb_resolve(k->mgr, k->state, (xkb_keycode_t)key);
+  return kb_resolve(k->state, (xkb_keycode_t)key);
+}
+
+/* The index of the bind the key runs, or -1. */
+static int bind_of(struct kbd* k, const struct kb_result* r) {
+  const struct config_bind* b = config_find_bind(&k->cfg, r);
+  return b != NULL ? (int)(b - k->cfg.binds.ptr) : -1;
 }
 
 static void check_bind(struct kbd* k, int mods, int group, int key, int bind) {
   struct kb_result r = press(k, mods, group, key);
-  if (!r.bound || r.bind != (uint32_t)bind) {
-    fprintf(stderr, "  key %d mods %d group %d: expected bind %d, got %s %u\n",
-            key, mods, group, bind, r.bound ? "bind" : "text", r.bind);
+  int got = bind_of(k, &r);
+  if (got != bind) {
+    fprintf(stderr, "  key %d mods %d group %d: expected bind %d, got %d\n",
+            key, mods, group, bind, got);
     test_failures++;
   }
 }
@@ -104,7 +112,7 @@ static void check_text(struct kbd* k,
                        int key,
                        const char* text) {
   struct kb_result r = press(k, mods, group, key);
-  CHECK(!r.bound);
+  CHECK(bind_of(k, &r) == -1);
   CHECK_STR(str_from_cstr(r.text), text);
 }
 
@@ -118,17 +126,17 @@ static void test_resolve(void) {
     return;
   }
   k.state = xkb_state_new(k.keymap);
-  k.mgr = kb_manager_new();
+  config_init(&k.cfg);
 
   static const char* const binds[] = {
-      "Control+a", "Control+plus",    "Shift+1",   "Shift+Tab",
-      "Tab",       "Shift+BackSpace", "Control+w", "Control+A",
+      "Control+a=cancel", "Control+plus=cancel",    "Shift+1=cancel",
+      "Shift+Tab=cancel", "Tab=cancel",             "Shift+BackSpace=cancel",
+      "Control+w=cancel", "Control+A=cancel",       "Control+q=cancel",
+      "Control+q=none",
   };
-  for (size_t i = 0; i < sizeof binds / sizeof binds[0]; i++) {
-    struct kb_keypress kp;
-    CHECK(kb_parse_keypress(str_from_cstr(binds[i]), &kp));
-    CHECK(kb_load_bind(k.mgr, kp, (uint32_t)i));
-  }
+  for (size_t i = 0; i < sizeof binds / sizeof binds[0]; i++)
+    config_set_bind(&k.cfg, binds[i]);
+  CHECK(k.cfg.binds.len == sizeof binds / sizeof binds[0]);
 
   check_bind(&k, CTRL, 0, KEY_A, 0);
   check_bind(&k, CTRL | LOCK, 0, KEY_A, 0);       // Caps Lock
@@ -150,9 +158,9 @@ static void test_resolve(void) {
   check_text(&k, SHIFT, 1, KEY_A, "Ф");
   check_text(&k, NONE, 0, KEY_ENTER, "");      // unbound, but not text
   check_text(&k, NONE, 0, KEY_BACKSPACE, "");  // likewise
-  check_text(&k, CTRL, 0, KEY_Q, "");          // an unbound chord
+  check_text(&k, CTRL, 0, KEY_Q, "");          // bound, then unbound
 
-  kb_manager_destroy(k.mgr);
+  config_destroy(&k.cfg);
   xkb_state_unref(k.state);
   xkb_keymap_unref(k.keymap);
   xkb_context_unref(k.ctx);

@@ -62,7 +62,6 @@ struct wayl {
   SeatList seats;           // heap-allocated, as listeners point at them
   struct seat* last_input;  // the seat of the last key press, or NULL
   struct fdm* fdm;
-  struct kb_manager* kb;  // not owned
   int display_fd;         // -1 until registered with fdm
 
   int32_t width, height;  // last configured logical size
@@ -234,8 +233,8 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 
 static void seat_emit_key(struct seat* seat, xkb_keycode_t keycode) {
   struct wayl* w = seat->wayl;
-  struct kb_result r = kb_resolve(w->kb, seat->xkb_state, keycode);
-  if (r.bound || r.text[0] != '\0')
+  struct kb_result r = kb_resolve(seat->xkb_state, keycode);
+  if (r.n_keys > 0 || r.text[0] != '\0')
     w->listener->key(w->data, &r);
 }
 
@@ -617,7 +616,6 @@ static struct wayl* fail(struct wayl* w, const char* why) {
 }
 
 struct wayl* wayl_new(struct fdm* fdm,
-                      struct kb_manager* kb,
                       const struct wayl_listener* listener,
                       void* data,
                       const char* namespace) {
@@ -625,7 +623,6 @@ struct wayl* wayl_new(struct fdm* fdm,
   *w = (struct wayl){
       .seats = LIST_INIT,
       .fdm = fdm,
-      .kb = kb,
       .display_fd = -1,
       .width = 640,
       .height = 480,

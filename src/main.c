@@ -22,7 +22,6 @@
 #include "config.h"
 #include "fdm.h"
 #include "input.h"
-#include "kb.h"
 #include "log.h"
 #include "render.h"
 #include "shell.h"
@@ -35,7 +34,6 @@ struct app {
   struct fdm fdm;
   struct procs procs;  // reload commands
   struct config config;
-  struct kb_manager* kb;
   struct input input;  // feeds entries from stdin into the state
   struct wayl* wayl;
   struct state state;    // the state
@@ -103,17 +101,6 @@ static bool run_entry(const struct state_entry* entry, const char* token) {
     ok = spawn_detached(argv, token);
   free(argv);
   return ok;
-}
-
-static bool load_binds(struct kb_manager* kb, const struct config* cfg) {
-  for (size_t i = 0; i < cfg->binds.len; i++) {
-    const struct config_bind* b = &cfg->binds.ptr[i];
-    if (b->actions.len == 0)
-      kb_unload_bind(kb, b->key);
-    else if (!kb_load_bind(kb, b->key, (uint32_t)i))
-      return false;
-  }
-  return true;
 }
 
 static void on_entries(void* data) {
@@ -261,8 +248,7 @@ static bool run_action(struct app* app, const struct action* a) {
   return false;
 }
 
-static void run_actions(struct app* app, uint32_t bind) {
-  const ActionList* actions = &app->config.binds.ptr[bind].actions;
+static void run_actions(struct app* app, const ActionList* actions) {
   for (size_t i = 0; i < actions->len; i++) {
     if (run_action(app, &actions->ptr[i]))
       return;
@@ -276,11 +262,11 @@ static void on_key(void* data, const struct kb_result* key) {
   if (!app->running)
     return;
 
-  if (!key->bound) {
+  const struct config_bind* bind = config_find_bind(&app->config, key);
+  if (bind != NULL)
+    run_actions(app, &bind->actions);
+  else if (key->text[0] != '\0')
     state_query_insert(&app->state, str_from_cstr(key->text));
-  } else {
-    run_actions(app, key->bind);
-  }
   if (app->running)
     render_request(&app->render);
 }
@@ -486,14 +472,7 @@ int main(int argc, char** argv) {
   state_set_border_label(&app.state, sb_str(&ui->border_label));
   state_set_fuzzy(&app.state, ui->fuzzy);
 
-  app.kb = kb_manager_new();
-  if (app.kb == NULL || !load_binds(app.kb, &app.config)) {
-    LOG_FATAL("failed to set up keybindings");
-    err = 1;
-    goto cleanup;
-  }
-
-  app.wayl = wayl_new(&app.fdm, app.kb, &wayl_listener, &app, "lm10");
+  app.wayl = wayl_new(&app.fdm, &wayl_listener, &app, "lm10");
   if (app.wayl == NULL) {
     err = 1;
     goto cleanup;
@@ -538,7 +517,6 @@ cleanup:
   if (render_ok)
     render_destroy(&app.render);  // before wayl: uses its surface and shm
   wayl_destroy(app.wayl);
-  kb_manager_destroy(app.kb);  // after wayl: it looks keys up in it
   procs_destroy(&app.procs);  // after input: it terminates through procs
   fdm_destroy(&app.fdm);
   if (err == 0 && app.pending != NULL && !run_entry(app.pending, token))
