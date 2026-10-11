@@ -102,12 +102,21 @@ core_srcs = files(
 core_inc = [include_directories('include'), third_party_inc]
 core_deps = [wayland_client, glib, pangocairo, xkbcommon, m]
 
+# examples/lm10.ini, for --print-config; on its own for C23's #embed.
+config_example_lib = static_library(
+  'lm10-config-example',
+  'src/config_example.c',
+  include_directories: core_inc,
+  dependencies: [xkbcommon],
+  override_options: ['c_std=gnu23'],
+)
+
 core_lib = static_library(
   'lm10-core',
   core_srcs,
   protocol_headers,
   include_directories: core_inc,
-  link_with: third_party_lib,
+  link_with: [third_party_lib, config_example_lib],
   dependencies: core_deps,
 )
 

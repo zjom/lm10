@@ -262,7 +262,7 @@ void app_key(struct app* app, const struct kb_result* key) {
 
 /* getopt_long values past the chars: --KEY is OPT_MAIN + its index in
  * config_main_keys */
-enum { OPT_COLOR = 0x100, OPT_BIND, OPT_MAIN };
+enum { OPT_PRINT_CONFIG = 0x100, OPT_COLOR, OPT_BIND, OPT_MAIN };
 
 /* A config flag as given, applied after the file. */
 struct flag {
@@ -275,6 +275,7 @@ static void usage(FILE* f, const char* argv0) {
           "usage: %s [-v] [-c CONFIG] [--KEY VALUE]... [--color "
           "NAME=VALUE,...]...\n"
           "       [--bind KEY=ACTIONS]...\n"
+          "       %s --print-config\n"
           "\n"
           "Reads entries from stdin, one per line:\n"
           "  [-n NAME] [-x|-X] COMMAND [ARG...]\n"
@@ -287,9 +288,10 @@ static void usage(FILE* f, const char* argv0) {
           "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
           "  -v, --verbose      log more; twice for even more\n"
           "  -h, --help         show this help\n"
+          "  --print-config     print the default lm10.ini, with comments\n"
           "\n"
           "These override the config file, in order (see lm10.ini):\n",
-          argv0);
+          argv0, argv0);
   for (size_t i = 0; i < config_n_main_keys; i++)
     fprintf(f, "  --%s %s\n", config_main_keys[i].name,
             config_main_keys[i].arg);
@@ -362,6 +364,7 @@ int main(int argc, char** argv) {
       {"config", required_argument, NULL, 'c'},
       {"verbose", no_argument, NULL, 'v'},
       {"help", no_argument, NULL, 'h'},
+      {"print-config", no_argument, NULL, OPT_PRINT_CONFIG},
       {"color", required_argument, NULL, OPT_COLOR},
       {"bind", required_argument, NULL, OPT_BIND},
   };
@@ -385,6 +388,15 @@ int main(int argc, char** argv) {
         free(opts);
         free(flags);
         return EXIT_SUCCESS;
+      case OPT_PRINT_CONFIG: {
+        size_t n = fwrite(config_example, 1, config_example_len, stdout);
+        bool ok = n == config_example_len && fflush(stdout) == 0;
+        if (!ok)
+          LOG_ERROR("failed to write to stdout: %s", strerror(errno));
+        free(opts);
+        free(flags);
+        return ok ? EXIT_SUCCESS : EXIT_ERROR;
+      }
       case '?':
         usage(stderr, argv[0]);
         free(opts);

@@ -99,6 +99,11 @@ struct config {
   struct config_ui ui;
 };
 
+/* examples/lm10.ini, embedded at build time: the built-in config with its
+ * comments. Not NUL-terminated. */
+extern const char config_example[];
+extern const size_t config_example_len;
+
 void config_init(struct config* cfg);
 void config_destroy(struct config* cfg);
 
