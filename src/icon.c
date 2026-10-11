@@ -160,7 +160,8 @@ static void set_dir_key(struct icon_dir* d, Str key, Str val) {
       d->type = DIR_THRESHOLD;
     return;
   }
-  if (!str_to_i64(val, 10, &n) || n < 0 || n > 100000)
+  /* No icon is bigger: this keeps dir_distance's products within int. */
+  if (!str_to_i64(val, 10, &n) || n < 0 || n > 4096)
     return;
   if (str_eq_cstr(key, "Size"))
     d->size = (int)n;
