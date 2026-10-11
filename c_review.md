@@ -95,6 +95,7 @@ Judge everything against these:
 
 ## Output format
 
+Write your findings into `FINDINGS.md` in the repo root.
 Start with a 3–5 sentence verdict: the overall state of the codebase and the
 single most important thing to fix.
 

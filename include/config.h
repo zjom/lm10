@@ -44,6 +44,8 @@ struct config_colors {
 /* Sizes are in logical pixels. */
 struct config_ui {
   StrBuf font;  // pango font description, e.g. "Sans 13"
+  /* prompt, header and border_label are the initial values; actions change
+   * the state's copies. */
   StrBuf prompt;
   StrBuf placeholder;  // shown while the query is empty
   int width;           // pixels, or a percentage of the output if
@@ -119,8 +121,8 @@ bool config_set_colors(struct config* cfg, const char* list);
 /* --bind KEY=ACTIONS binds a key as a [keys] line does. */
 bool config_set_bind(struct config* cfg, const char* arg);
 
-/* Sets a header: s with each \n turned into a line break. Returns false on
- * allocation failure. */
-bool config_set_header(StrBuf* dst, Str s);
+/* Sets dst to s with each \n turned into a line break, as headers are
+ * written. Returns false on allocation failure. */
+bool config_unescape(StrBuf* dst, Str s);
 
 #endif  // !LM_CONFIG_H

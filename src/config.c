@@ -38,7 +38,7 @@ static bool set_str(StrBuf* dst, Str s) {
   return sb_append(dst, s);
 }
 
-bool config_set_header(StrBuf* dst, Str s) {
+bool config_unescape(StrBuf* dst, Str s) {
   sb_clear(dst);
   Str before, after;
   while (str_cut(s, STR("\\n"), &before, &after)) {
@@ -230,7 +230,7 @@ static bool set_main(struct config_ui* ui,
   }
 
   if (str_eq_cstr(key, "header"))
-    return config_set_header(&ui->header, val);
+    return config_unescape(&ui->header, val);
 
   if (str_eq_cstr(key, "width")) {
     if (!parse_width(val, &ui->width, &ui->width_percent))

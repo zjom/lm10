@@ -151,7 +151,7 @@ static void on_size(void* data, int out_w, int out_h, int* w, int* h) {
   struct app* app = data;
   const struct config_ui* ui = &app->config.ui;
   int want_w = ui->width_percent ? out_w * ui->width / 100 : ui->width;
-  int want_h = draw_height(&app->render.dctx);
+  int want_h = draw_height(&app->render.dctx, &app->state);
   *w = want_w < out_w ? want_w : out_w;
   *h = want_h < out_h ? want_h : out_h;
 }
@@ -160,6 +160,7 @@ static void on_configure(void* data, int w, int h) {
   struct app* app = data;
   render_resize(&app->render, w, h);
   /* configure must be answered with a commit, even if nothing changed */
+  render_invalidate(&app->render);
   render_request(&app->render);
 }
 
@@ -279,18 +280,20 @@ static enum flow run_action(struct app* app, const struct action* a) {
       state_select_prev(st);
       break;
     case ACTION_CHANGE_PROMPT:
-      sb_clear(&app->config.ui.prompt);
-      ok = sb_append(&app->config.ui.prompt, a->arg);
+      ok = state_set_prompt(st, a->arg);
       break;
     case ACTION_CHANGE_QUERY:
       ok = state_query_set(st, a->arg);
       break;
-    case ACTION_CHANGE_HEADER:
-      ok = config_set_header(&app->config.ui.header, a->arg);
+    case ACTION_CHANGE_HEADER: {
+      StrBuf header = STRBUF_INIT;
+      ok = config_unescape(&header, a->arg) &&
+           state_set_header(st, sb_str(&header));
+      sb_free(&header);
       break;
+    }
     case ACTION_CHANGE_BORDER_LABEL:
-      sb_clear(&app->config.ui.border_label);
-      ok = sb_append(&app->config.ui.border_label, a->arg);
+      ok = state_set_border_label(st, a->arg);
       break;
     case ACTION_RELOAD:
     case ACTION_EXECUTE: {
@@ -535,6 +538,14 @@ int main(int argc, char** argv) {
   bool config_ok = load_config(&app.config, config_path, flags, n_flags);
   free(flags); /* the flags were copied into the config */
   if (!config_ok) {
+    err = 1;
+    goto cleanup;
+  }
+  const struct config_ui* ui = &app.config.ui;
+  if (!state_set_prompt(&app.state, sb_str(&ui->prompt)) ||
+      !state_set_header(&app.state, sb_str(&ui->header)) ||
+      !state_set_border_label(&app.state, sb_str(&ui->border_label))) {
+    LOG_FATAL("allocation failed");
     err = 1;
     goto cleanup;
   }

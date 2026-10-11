@@ -56,6 +56,6 @@ typedef LIST(struct action) ActionList;
  *
  * With no selection, or out of range, they expand to ''. Other braces are
  * copied as is. Returns false on allocation failure. */
-bool action_expand(StrBuf* out, Str tmpl, struct state* state);
+bool action_expand(StrBuf* out, Str tmpl, const struct state* state);
 
 #endif  // !LM_ACTION_H

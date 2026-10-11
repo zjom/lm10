@@ -64,24 +64,25 @@ struct geom {
 };
 
 /* Lines in the header, 0 if there is none. */
-static size_t header_lines(const struct config_ui* ui) {
-  if (ui->header.len == 0)
+static size_t header_lines(const struct state* state) {
+  if (state->header.len == 0)
     return 0;
   size_t n = 1;
-  for (size_t i = 0; i < ui->header.len; i++)
-    n += ui->header.ptr[i] == '\n';
+  for (size_t i = 0; i < state->header.len; i++)
+    n += state->header.ptr[i] == '\n';
   return n;
 }
 
-static struct geom geometry(const struct draw_ctx* dc) {
+static struct geom geometry(const struct draw_ctx* dc,
+                            const struct state* state) {
   const struct config_ui* ui = dc->ui;
   struct geom g = {0};
-  if (ui->border_label.len > 0) {
+  if (state->border_label.len > 0) {
     double out = ceil(dc->line_h / 2.0 - ui->border_width / 2.0);
     if (out > 0)
       *(ui->border_label_bottom ? &g.bottom : &g.top) = out;
   }
-  size_t lines = header_lines(ui);
+  size_t lines = header_lines(state);
   g.inset = ui->border_width + ui->padding;
   g.row_h = dc->line_h + 2.0 * ui->row_padding;
   g.query_y = g.top + g.inset;
@@ -93,8 +94,8 @@ static struct geom geometry(const struct draw_ctx* dc) {
   return g;
 }
 
-int draw_height(const struct draw_ctx* dc) {
-  struct geom g = geometry(dc);
+int draw_height(const struct draw_ctx* dc, const struct state* state) {
+  struct geom g = geometry(dc, state);
   return (int)ceil(g.list_y + dc->ui->lines * g.row_h + g.inset + g.bottom);
 }
 
@@ -213,12 +214,13 @@ struct label_box {
  * none. The label stays clear of the rounded corners, ellipsized if it
  * doesn't fit between them. */
 static bool place_label(const struct config_ui* ui,
+                        const struct state* state,
                         const struct geom* g,
                         PangoLayout* layout,
                         int w,
                         int h,
                         struct label_box* box) {
-  if (ui->border_label.len == 0)
+  if (state->border_label.len == 0)
     return false;
   double bw = ui->border_width;
   double margin = ui->border_radius > bw ? ui->border_radius : bw;
@@ -226,7 +228,7 @@ static bool place_label(const struct config_ui* ui,
   if (room <= 0)
     return false;
 
-  set_text(layout, sb_str(&ui->border_label));
+  set_text(layout, sb_str(&state->border_label));
   pango_layout_set_width(layout, (int)(room * PANGO_SCALE));
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
   int tw, th;
@@ -289,16 +291,17 @@ static void draw_label(cairo_t* cr,
 }
 
 static void draw_header(const struct draw_ctx* dc,
+                        const struct state* state,
                         const struct geom* g,
                         cairo_t* cr,
                         PangoLayout* layout,
                         int w) {
   const struct config_ui* ui = dc->ui;
   double text_w = w - 2 * g->inset - 2 * ui->row_padding;
-  if (ui->header.len == 0 || text_w <= 0)
+  if (state->header.len == 0 || text_w <= 0)
     return;
   /* Each line is ellipsized on its own. */
-  set_text(layout, sb_str(&ui->header));
+  set_text(layout, sb_str(&state->header));
   pango_layout_set_width(layout, (int)(text_w * PANGO_SCALE));
   pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
   set_color(cr, ui->colors.header);
@@ -306,7 +309,7 @@ static void draw_header(const struct draw_ctx* dc,
   pango_cairo_show_layout(cr, layout);
 }
 
-static void draw_query(const struct state* v,
+static void draw_query(const struct state* state,
                        const struct draw_ctx* dc,
                        const struct geom* g,
                        cairo_t* cr,
@@ -316,15 +319,15 @@ static void draw_query(const struct state* v,
   double x = g->inset + ui->row_padding, y = g->query_y;
   double right = w - g->inset - ui->row_padding;
 
-  set_text(layout, sb_str(&ui->prompt));
+  set_text(layout, sb_str(&state->prompt));
   set_color(cr, ui->colors.prompt);
   show(cr, layout, g, x, y);
   x += text_width(layout);
 
-  if (ui->show_counter && v->entries.len > 0) {
+  if (ui->show_counter && state->entries.len > 0) {
     char buf[48];
-    int n =
-        snprintf(buf, sizeof buf, "%zu/%zu", v->matches.len, v->entries.len);
+    int n = snprintf(buf, sizeof buf, "%zu/%zu", state->matches.len,
+                     state->entries.len);
     set_text(layout, str_from_parts(buf, (size_t)n));
     right -= text_width(layout);
     set_color(cr, ui->colors.counter);
@@ -341,14 +344,14 @@ static void draw_query(const struct state* v,
   cairo_clip(cr);
 
   double cur_x = 0;
-  if (v->query.len == 0) {
+  if (state->query.len == 0) {
     set_text(layout, sb_str(&ui->placeholder));
     set_color(cr, ui->colors.placeholder);
     show(cr, layout, g, x, y);
   } else {
-    set_text(layout, sb_str(&v->query));
+    set_text(layout, sb_str(&state->query));
     PangoRectangle pos;
-    pango_layout_index_to_pos(layout, (int)v->cursor, &pos);
+    pango_layout_index_to_pos(layout, (int)state->cursor, &pos);
     cur_x = (double)pos.x / PANGO_SCALE;
     double scroll = cur_x > avail ? cur_x - avail : 0;
     set_color(cr, ui->colors.input);
@@ -363,19 +366,19 @@ static void draw_query(const struct state* v,
 }
 
 /* Moves dc->first so the selection is one of the visible rows. */
-static void scroll_to_selection(const struct state* v,
+static void scroll_to_selection(const struct state* state,
                                 struct draw_ctx* dc,
                                 size_t visible) {
-  size_t n = v->matches.len;
-  if (v->selected < dc->first)
-    dc->first = v->selected;
-  else if (v->selected >= dc->first + visible)
-    dc->first = v->selected + 1 - visible;
+  size_t n = state->matches.len;
+  if (state->selected < dc->first)
+    dc->first = state->selected;
+  else if (state->selected >= dc->first + visible)
+    dc->first = state->selected + 1 - visible;
   if (dc->first + visible > n)
     dc->first = n > visible ? n - visible : 0;
 }
 
-static void draw_rows(const struct state* v,
+static void draw_rows(const struct state* state,
                       struct draw_ctx* dc,
                       const struct geom* g,
                       cairo_t* cr,
@@ -386,21 +389,21 @@ static void draw_rows(const struct state* v,
   const struct config_colors* c = &ui->colors;
   double x = g->inset, cw = w - 2 * g->inset;
   double list_h = h - g->bottom - g->inset - g->list_y;
-  size_t n = v->matches.len;
+  size_t n = state->matches.len;
   size_t visible = list_h > 0 ? (size_t)(list_h / g->row_h) : 0;
   if (visible == 0)
     return;
 
   if (n == 0) {
     dc->first = 0;
-    if (v->entries.len > 0) {
+    if (state->entries.len > 0) {
       set_text(layout, STR("No matches"));
       set_color(cr, c->placeholder);
       show(cr, layout, g, x + ui->row_padding, g->list_y);
     }
     return;
   }
-  scroll_to_selection(v, dc, visible);
+  scroll_to_selection(state, dc, visible);
 
   /* Leave room for a scrollbar in the right padding when it's needed. */
   bool scrollbar = n > visible && ui->padding >= SCROLLBAR_W + 2;
@@ -408,20 +411,20 @@ static void draw_rows(const struct state* v,
    * line up, and it stays so they don't jump around while filtering. */
   for (size_t i = dc->first;
        dc->icons && !dc->icon_column && i < n && i < dc->first + visible; i++)
-    dc->icon_column = entry_icon(dc, cr, state_match(v, i)) != NULL;
+    dc->icon_column = entry_icon(dc, cr, state_match(state, i)) != NULL;
   double icon_w = dc->icon_column ? dc->line_h + ICON_GAP : 0;
   double text_x = x + ui->row_padding + icon_w;
 
   for (size_t i = dc->first; i < n && i < dc->first + visible; i++) {
     double y = g->list_y + (double)(i - dc->first) * g->row_h;
-    bool sel = i == v->selected;
+    bool sel = i == state->selected;
     if (sel) {
       rounded_rect(cr, x, y, cw, g->row_h, ui->selection_radius);
       set_color(cr, c->selection);
       cairo_fill(cr);
     }
 
-    const struct state_entry* e = state_match(v, i);
+    const struct state_entry* e = state_match(state, i);
     cairo_surface_t* icon = dc->icon_column ? entry_icon(dc, cr, e) : NULL;
     if (icon != NULL)
       draw_icon(cr, icon, e->icon, sel ? c->selection_text : c->text,
@@ -431,10 +434,10 @@ static void draw_rows(const struct state* v,
     pango_layout_set_width(
         layout, (int)((cw - 2 * ui->row_padding - icon_w) * PANGO_SCALE));
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
-    size_t off = state_match_offset(v, i);
-    if (v->query.len > 0 && off != STR_NPOS) {
-      PangoAttrList* attrs = highlight(off, off + v->query.len,
-                                       sel ? c->selection_match : c->match);
+    size_t start, len;
+    if (state_match_span(state, i, &start, &len)) {
+      PangoAttrList* attrs =
+          highlight(start, start + len, sel ? c->selection_match : c->match);
       pango_layout_set_attributes(layout, attrs);
       pango_attr_list_unref(attrs);
     }
@@ -453,13 +456,13 @@ static void draw_rows(const struct state* v,
   }
 }
 
-void draw(const struct state* v,
+void draw(const struct state* state,
           struct draw_ctx* dc,
           cairo_t* cr,
           int w,
           int h) {
   const struct config_ui* ui = dc->ui;
-  struct geom g = geometry(dc);
+  struct geom g = geometry(dc, state);
 
   /* Buffers are reused, so clear to transparent first. */
   cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
@@ -471,12 +474,12 @@ void draw(const struct state* v,
   pango_layout_set_font_description(layout, dc->font);
 
   struct label_box label;
-  bool has_label = place_label(ui, &g, layout, w, h, &label);
+  bool has_label = place_label(ui, state, &g, layout, w, h, &label);
   draw_panel(cr, ui, &g, has_label ? &label : NULL, w, h);
   if (has_label)
     draw_label(cr, ui, layout, &label);
 
-  draw_query(v, dc, &g, cr, layout, w);
+  draw_query(state, dc, &g, cr, layout, w);
 
   if (ui->colors.separator.a > 0 && ui->padding > 0) {
     set_color(cr, ui->colors.separator);
@@ -484,8 +487,8 @@ void draw(const struct state* v,
     cairo_fill(cr);
   }
 
-  draw_header(dc, &g, cr, layout, w);
-  draw_rows(v, dc, &g, cr, layout, w, h);
+  draw_header(dc, state, &g, cr, layout, w);
+  draw_rows(state, dc, &g, cr, layout, w, h);
 
   g_object_unref(layout);
 }

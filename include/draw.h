@@ -23,10 +23,11 @@ struct draw_ctx {
 int draw_ctx_init(struct draw_ctx* dc, const struct config_ui* ui);
 void draw_ctx_destroy(struct draw_ctx* dc);
 
-/* The surface height that fits the query row and ui->lines rows. */
-int draw_height(const struct draw_ctx* dc);
+/* The surface height that fits the query row, the state's header and
+ * ui->lines rows. */
+int draw_height(const struct draw_ctx* dc, const struct state* state);
 
-void draw(const struct state* v,
+void draw(const struct state* state,
           struct draw_ctx* dc,
           cairo_t* cr,
           int w,

@@ -53,7 +53,8 @@ static struct frame* acquire_frame(struct render* r) {
 static int try_present(struct render* r) {
   if (r->err != LM_OK)
     return -1;
-  if (!r->dirty || r->frame_cb != NULL || r->width <= 0 || r->height <= 0)
+  bool stale = r->dirty || r->state->gen != r->drawn_gen;
+  if (!stale || r->frame_cb != NULL || r->width <= 0 || r->height <= 0)
     return 0;
 
   struct frame* f = acquire_frame(r);
@@ -80,6 +81,7 @@ static int try_present(struct render* r) {
   wl_surface_commit(r->surface);
 
   r->dirty = false;
+  r->drawn_gen = r->state->gen;
   return 0;
 }
 
@@ -89,7 +91,12 @@ int render_init(struct render* r,
                 const struct state* state,
                 const struct config_ui* ui) {
   *r = (struct render){
-      .surface = surface, .shm = shm, .state = state, .scale120 = 120};
+      .surface = surface,
+      .shm = shm,
+      .state = state,
+      .scale120 = 120,
+      .dirty = true, /* nothing drawn yet */
+  };
   if (draw_ctx_init(&r->dctx, ui) != 0) {
     LOG_ERROR("failed to set up drawing (bad font or out of memory)");
     return -1;
@@ -121,7 +128,10 @@ void render_set_scale(struct render* r, uint32_t scale120) {
   r->dirty = true;
 }
 
-int render_request(struct render* r) {
+void render_invalidate(struct render* r) {
   r->dirty = true;
+}
+
+int render_request(struct render* r) {
   return try_present(r);
 }

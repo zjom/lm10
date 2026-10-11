@@ -19,7 +19,7 @@ static bool parse_index(Str s, size_t* out) {
 
 /* Appends the expansion of the placeholder {name}. Returns false if name
  * isn't one. */
-static bool expand_one(StrBuf* out, Str name, struct state* state) {
+static bool expand_one(StrBuf* out, Str name, const struct state* state) {
   const struct state_entry* e = state_get_selection(state);
 
   if (str_eq(name, STR("q"))) {
@@ -60,7 +60,7 @@ static bool expand_one(StrBuf* out, Str name, struct state* state) {
   return true;
 }
 
-bool action_expand(StrBuf* out, Str tmpl, struct state* state) {
+bool action_expand(StrBuf* out, Str tmpl, const struct state* state) {
   sb_clear(out);
   size_t i = 0;
   while (i < tmpl.len) {
