@@ -59,7 +59,7 @@ static void test_reused_fd(void) {
 static enum lm_err on_error(struct fdm* fdm, void* data) {
   (void)fdm;
   (void)data;
-  return LM_ERR_EXEC;
+  return LM_ERR_POLL;
 }
 
 static enum lm_err on_close(struct fdm* fdm, void* data) {
@@ -76,7 +76,7 @@ static void test_errors_and_autoclose(void) {
   CHECK(pipe(p) == 0);
   CHECK(write(p[1], "x", 1) == 1);
   CHECK(fdm_add(&fdm, p[0], EPOLLIN, on_error, NULL, 0) == 0);
-  CHECK(fdm_wait(&fdm) == LM_ERR_EXEC);
+  CHECK(fdm_wait(&fdm) == LM_ERR_POLL);
 
   /* Re-adding replaces the registration. */
   int fd = p[0];

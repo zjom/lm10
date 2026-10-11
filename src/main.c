@@ -51,10 +51,9 @@ struct app {
   struct state state;    // the state
   struct render render;  // presents the state
   bool running;
-  /* A picked entry to print or exec in place of lm10 once it has shut down,
-   * with the activation token to hand it. */
+  /* The picked entry, run once the event loop has stopped: nothing may
+   * change the state after it is set. */
   const struct state_entry* pending;
-  char* exec_token;
 };
 
 /* A NULL-terminated argv pointing into entry, or NULL on allocation failure.
@@ -224,32 +223,26 @@ out_free_argv:
   return ok;
 }
 
-static bool exec_selection(struct app* app, const struct state_entry* entry) {
+/* Picks entry: the loop stops, and main runs it. */
+static void pick(struct app* app, const struct state_entry* entry) {
+  app->pending = entry;
   app->running = false;
+}
 
-  if (entry->run == STATE_RUN_PRINT) {
-    /* main prints it after tearing everything else down */
-    app->pending = entry;
-    return true;
+/* Runs the picked entry once everything else has been torn down, handing it
+ * the activation token if there is one. Returns false on failure; doesn't
+ * return if the entry execs in place of lm10. */
+static bool run_entry(const struct state_entry* entry, const char* token) {
+  switch (entry->run) {
+    case STATE_RUN_PRINT:
+      return print_entry(entry);
+    case STATE_RUN_EXEC:
+      exec_inplace(entry, token);
+      return false;
+    case STATE_RUN_DETACH:
+      return exec_entry(entry, token);
   }
-
-  char* xdg_activation_token = NULL;
-  get_xdg_activation_token(&app->wayl.seat, NULL, &xdg_activation_token);
-
-  if (entry->run == STATE_RUN_EXEC) {
-    /* main execs it after tearing everything else down */
-    app->pending = entry;
-    app->exec_token = xdg_activation_token;
-    return true;
-  }
-
-  bool ok = exec_entry(entry, xdg_activation_token);
-  if (!ok) {
-    app->wayl.err = LM_ERR_EXEC;
-  }
-  free(xdg_activation_token);
-
-  return ok;
+  return false;
 }
 
 static bool load_binds(struct kb_manager* kb, const struct config* cfg) {
@@ -357,7 +350,7 @@ static bool run_action(struct app* app, const struct action* a) {
       const struct state_entry* entry = state_get_selection(st);
       if (entry == NULL)
         return true;
-      exec_selection(app, entry);
+      pick(app, entry);
       return false;
     }
     case ACTION_MATCH_NEXT:
@@ -403,6 +396,10 @@ static bool run_action(struct app* app, const struct action* a) {
 
 static void on_key(void* data, const struct kb_result* key) {
   struct app* app = data;
+  /* Once the loop is stopping, keys already queued (or repeating) must not
+   * touch the state: a picked entry points into it. */
+  if (!app->running)
+    return;
 
   if (!key->bound) {
     if (!state_query_insert(&app->state, str_from_cstr(key->utf8)))
@@ -545,6 +542,7 @@ static bool load_config(struct config* cfg,
 
 int main(int argc, char** argv) {
   int err = 0;
+  char* token = NULL; /* activation token for the picked entry */
   bool fdm_ok = false, wayl_ok = false, render_ok = false, input_ok = false;
   const char* config_path = NULL;
   /* config flags, in order; there are fewer than argc of them */
@@ -668,6 +666,11 @@ int main(int argc, char** argv) {
     }
   }
 
+  /* Not from inside the loop: getting the token takes a roundtrip, which
+   * must not run while the loop has a read prepared on the display. */
+  if (app.pending != NULL && app.pending->run != STATE_RUN_PRINT)
+    get_xdg_activation_token(&app.wayl.seat, NULL, &token);
+
 cleanup:
   if (input_ok)
     input_destroy(&app.input);
@@ -678,16 +681,9 @@ cleanup:
   kb_manager_destroy(app.kb); /* after wayl: it looks keys up in it */
   if (fdm_ok)
     fdm_destroy(&app.fdm);
-  if (err == 0 && app.pending != NULL) { /* entry is in state */
-    if (app.pending->run == STATE_RUN_PRINT) {
-      if (!print_entry(app.pending))
-        err = 1;
-    } else {
-      exec_inplace(app.pending, app.exec_token);
-      err = 1;
-    }
-  }
-  free(app.exec_token);
+  if (err == 0 && app.pending != NULL && !run_entry(app.pending, token))
+    err = 1; /* the entry lives in state, which is still alive */
+  free(token);
   state_destroy(&app.state);
   config_destroy(&app.config);
   return err == 0 ? 0 : 1;

@@ -242,8 +242,10 @@ static enum lm_err handle_key_repeat_ready(struct fdm* fdm, void* data) {
   if (seat->kbd.repeat.key == 0 || seat->kbd.xkb_state == NULL)
     return LM_OK;
 
-  for (uint64_t i = 0; i < expcount; i++)
-    seat_emit_key(seat, seat->kbd.repeat.key);
+  /* One repeat however many ticks were missed: replaying them after the
+   * loop was busy would fire a burst of keys, possibly past the release
+   * that is already queued. */
+  seat_emit_key(seat, seat->kbd.repeat.key);
   return LM_OK;
 }
 
