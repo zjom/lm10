@@ -5,19 +5,12 @@
 #include "fdm.h"
 #include "kb.h"
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include <wayland-client.h>
-#include <wlr-layer-shell-unstable-v1-client-protocol.h>
-#include <xkbcommon/xkbcommon.h>
 
-struct xdg_activation_v1;
-struct wp_viewporter;
-struct wp_viewport;
-struct wp_fractional_scale_manager_v1;
-struct wp_fractional_scale_v1;
-
+/* The Wayland connection: a wlr-layer-shell overlay surface, centered on
+ * the output, that takes the keyboard from every seat. */
 struct wayl;
 
 /* How wayl talks to the app. All callbacks run from inside event dispatch. */
@@ -36,78 +29,22 @@ struct wayl_listener {
   void (*key)(void* data, const struct kb_result* key);
 };
 
-struct repeat {
-  int32_t rate;      /* repeats per second; 0 = disabled */
-  int32_t delay;     /* ms before the first repeat */
-  int fd;            /* timerfd, -1 if not created yet */
-  xkb_keycode_t key; /* XKB keycode (evdev + 8) being repeated, 0 = none */
-};
-
-struct seat {
-  char* name;
-  uint32_t wl_name;
-  struct wl_seat* wl_seat;
-
-  struct wayl* wayl;
-
-  struct wl_keyboard* wl_kbd;
-  struct {
-    uint32_t serial;
-    struct xkb_keymap* xkb_keymap;
-    struct xkb_state* xkb_state;
-    struct repeat repeat;
-  } kbd;
-};
-
-struct wayl {
-  struct wl_display* display;
-  struct wl_registry* registry;
-  struct wl_compositor* compositor;
-  struct wl_shm* shm;
-  struct xdg_wm_base* wm_base;
-  struct wl_surface* surface;
-  struct zwlr_layer_shell_v1* layer_shell;
-  struct zwlr_layer_surface_v1* layer_surface;
-  struct xkb_context* xkb_ctx;
-  struct wl_event_queue* xdg_activation_v1_queue;
-  struct xdg_activation_v1* xdg_activation_v1;
-  /* Optional: with both, the surface gets fractional scales; otherwise only
-   * integer ones from wl_surface.preferred_buffer_scale (wl_compositor v6). */
-  struct wp_viewporter* viewporter;
-  struct wp_fractional_scale_manager_v1* fractional_scale_manager;
-  struct wp_viewport* viewport;
-  struct wp_fractional_scale_v1* fractional_scale;
-  struct seat seat;
-  struct fdm* fdm;
-  struct kb_manager* kb;  // not owned
-  int32_t display_fd;     // -1 until registered with fdm
-
-  int32_t width, height;  // last configured logical size
-  uint32_t scale120;      // preferred scale in 120ths
-
-  /* false until the first configure (full output, all edges anchored) has
-   * been answered with our centered size. */
-  bool sized;
-
-  /* true between a successful wl_display_prepare_read() and its matching
-   * wl_display_read_events() / wl_display_cancel_read(). */
-  bool read_prepared;
-
-  const struct wayl_listener* listener;
-  void* data;
-
-  enum lm_err err;  // sticky; checked by the main loop
-};
-
-/* Connects, binds globals, creates the toplevel and registers the display fd
- * with fdm. On failure, returns -1; call wayl_destroy either way. */
-int wayl_init(struct wayl* w,
-              struct fdm* fdm,
-              struct kb_manager* kb,
-              const struct wayl_listener* listener,
-              void* data,
-              const char* title);
+/* Connects, binds the globals, creates the layer surface (namespace is its
+ * layer-shell namespace) and registers the display fd with fdm. kb resolves
+ * keys and must outlive the wayl. Returns NULL on failure (logged). */
+struct wayl* wayl_new(struct fdm* fdm,
+                      struct kb_manager* kb,
+                      const struct wayl_listener* listener,
+                      void* data,
+                      const char* namespace);
 void wayl_destroy(struct wayl* w);
+
+struct wl_shm* wayl_shm(const struct wayl* w);
+struct wl_surface* wayl_surface(const struct wayl* w);
+
+/* A fatal error met while handling events (e.g. a keymap that doesn't
+ * compile), or LM_OK. Sticky; checked by the main loop. */
+enum lm_err wayl_error(const struct wayl* w);
 
 /* Main-loop halves around fdm_wait(): wayl_prepare dispatches queued events
  * until it can become a reader, then flushes; wayl_finish cancels the read if
@@ -116,15 +53,10 @@ void wayl_destroy(struct wayl* w);
 enum lm_err wayl_prepare(struct wayl* w);
 void wayl_finish(struct wayl* w);
 
-/* Synchronously grab a token from the compositor.
- * xdg_activation_token return parameter will not be modified if:
- * - there's no manager OR
- * - the roundtrip fails,
- *
- * if strdup fails, xdg_activation_token will become NULL
- */
-void get_xdg_activation_token(struct seat* seat,
-                              const char* app_id,
-                              char** xdg_activation_token);
+/* Asks the compositor for an xdg-activation token for whatever the last key
+ * press starts, so it may take focus. Takes a roundtrip, so it must not run
+ * between wayl_prepare and wayl_finish. Returns the token (free() it), or
+ * NULL if there is none. */
+char* wayl_activation_token(struct wayl* w);
 
 #endif  // !LM_WAYL_H

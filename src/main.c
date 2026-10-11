@@ -47,7 +47,7 @@ struct app {
   struct config config;
   struct kb_manager* kb;
   struct input input;  // feeds entries from stdin into the state
-  struct wayl wayl;
+  struct wayl* wayl;
   struct state state;    // the state
   struct render render;  // presents the state
   bool running;
@@ -479,7 +479,7 @@ static bool load_config(struct config* cfg,
 int main(int argc, char** argv) {
   int err = 0;
   char* token = NULL; /* activation token for the picked entry */
-  bool fdm_ok = false, wayl_ok = false, render_ok = false, input_ok = false;
+  bool fdm_ok = false, render_ok = false, input_ok = false;
   const char* config_path = NULL;
   /* config flags, in order; there are fewer than argc of them */
   struct flag* flags = calloc((size_t)argc, sizeof(*flags));
@@ -557,16 +557,15 @@ int main(int argc, char** argv) {
     goto cleanup;
   }
 
-  wayl_ok = true; /* wayl_destroy handles a partial init */
-  if (wayl_init(&app.wayl, &app.fdm, app.kb, &wayl_listener, &app, "lm10") !=
-      0) {
+  app.wayl = wayl_new(&app.fdm, app.kb, &wayl_listener, &app, "lm10");
+  if (app.wayl == NULL) {
     err = 1;
     goto cleanup;
   }
 
   /* Before the first configure is dispatched: on_size measures with it. */
-  if (render_init(&app.render, app.wayl.shm, app.wayl.surface, &app.state,
-                  &app.config.ui) != 0) {
+  if (render_init(&app.render, wayl_shm(app.wayl), wayl_surface(app.wayl),
+                  &app.state, &app.config.ui) != 0) {
     err = 1;
     goto cleanup;
   }
@@ -586,24 +585,26 @@ int main(int argc, char** argv) {
   unsetenv("DESKTOP_STARTUP_ID");
 
   while (app.running) {
-    if (wayl_prepare(&app.wayl) != LM_OK) {
+    if (wayl_prepare(app.wayl) != LM_OK) {
       err = 1;
       goto cleanup;
     }
 
     if (!app.running) { /* a dispatched event may have asked us to quit */
-      wayl_finish(&app.wayl);
+      wayl_finish(app.wayl);
       break;
     }
 
     enum lm_err wait_err = fdm_wait(&app.fdm);
-    wayl_finish(&app.wayl);
+    wayl_finish(app.wayl);
     if (wait_err != LM_OK) { /* already logged */
       err = 1;
       goto cleanup;
     }
 
-    enum lm_err e = app.wayl.err != LM_OK ? app.wayl.err : app.render.err;
+    enum lm_err e = wayl_error(app.wayl);
+    if (e == LM_OK)
+      e = app.render.err;
     if (e != LM_OK) {
       LOG_ERROR("app error: %s", lm_strerror(e));
       err = e;
@@ -614,15 +615,14 @@ int main(int argc, char** argv) {
   /* Not from inside the loop: getting the token takes a roundtrip, which
    * must not run while the loop has a read prepared on the display. */
   if (app.pending != NULL && app.pending->run != STATE_RUN_PRINT)
-    get_xdg_activation_token(&app.wayl.seat, NULL, &token);
+    token = wayl_activation_token(app.wayl);
 
 cleanup:
   if (input_ok)
     input_destroy(&app.input);
   if (render_ok)
     render_destroy(&app.render); /* before wayl: uses its surface and shm */
-  if (wayl_ok)
-    wayl_destroy(&app.wayl);
+  wayl_destroy(app.wayl);
   kb_manager_destroy(app.kb); /* after wayl: it looks keys up in it */
   if (fdm_ok) {
     procs_destroy(&app.procs); /* after input: it terminates through procs */

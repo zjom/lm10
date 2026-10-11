@@ -10,63 +10,112 @@
 #include <sys/timerfd.h>
 #include <unistd.h>
 #include <viewporter-client-protocol.h>
+#include <wlr-layer-shell-unstable-v1-client-protocol.h>
 #include <xdg-activation-v1-client-protocol.h>
-#include <xdg-shell-client-protocol.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include "log.h"
-#include "wlr-layer-shell-unstable-v1-client-protocol.h"
+#include "ztd_arr.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-static void wm_base_ping(void* data, struct xdg_wm_base* wm, uint32_t serial) {
-  (void)data;
-  xdg_wm_base_pong(wm, serial);
-}
-
-static const struct xdg_wm_base_listener wm_base_listener = {
-    .ping = wm_base_ping,
+struct repeat {
+  int32_t rate;       // repeats per second; 0 = disabled
+  int32_t delay;      // ms before the first repeat
+  int fd;             // timerfd, -1 if not created yet
+  xkb_keycode_t key;  // XKB keycode (evdev + 8) being repeated, 0 = none
 };
 
-/* ---- xdg activation token listeners ---- */
+struct seat {
+  struct wayl* wayl;
+  uint32_t wl_name;  // registry name, to notice the seat going away
+  struct wl_seat* wl_seat;
+  struct wl_keyboard* wl_kbd;
+  uint32_t serial;  // of the last key event, for activation tokens
+  struct xkb_keymap* xkb_keymap;
+  struct xkb_state* xkb_state;
+  struct repeat repeat;
+};
+
+typedef LIST(struct seat*) SeatList;
+
+struct wayl {
+  struct wl_display* display;
+  struct wl_registry* registry;
+  struct wl_compositor* compositor;
+  struct wl_shm* shm;
+  struct wl_surface* surface;
+  struct zwlr_layer_shell_v1* layer_shell;
+  struct zwlr_layer_surface_v1* layer_surface;
+  struct xkb_context* xkb_ctx;
+  /* Activation tokens are fetched with a roundtrip on a queue of their own,
+   * so it doesn't dispatch anything else. */
+  struct wl_event_queue* xdg_activation_v1_queue;
+  struct xdg_activation_v1* xdg_activation_v1;
+  /* Optional: with both, the surface gets fractional scales; otherwise only
+   * integer ones from wl_surface.preferred_buffer_scale (wl_compositor v6). */
+  struct wp_viewporter* viewporter;
+  struct wp_fractional_scale_manager_v1* fractional_scale_manager;
+  struct wp_viewport* viewport;
+  struct wp_fractional_scale_v1* fractional_scale;
+  SeatList seats;           // heap-allocated, as listeners point at them
+  struct seat* last_input;  // the seat of the last key press, or NULL
+  struct fdm* fdm;
+  struct kb_manager* kb;  // not owned
+  int display_fd;         // -1 until registered with fdm
+
+  int32_t width, height;  // last configured logical size
+  uint32_t scale120;      // preferred scale in 120ths
+
+  /* false until the first configure (full output, all edges anchored) has
+   * been answered with our centered size. */
+  bool sized;
+
+  /* true between a successful wl_display_prepare_read() and its matching
+   * wl_display_read_events() / wl_display_cancel_read(). */
+  bool read_prepared;
+
+  const struct wayl_listener* listener;
+  void* data;
+
+  enum lm_err err;  // sticky; see wayl_error
+};
+
+/* ---- activation tokens ---- */
 
 static void token_done(void* data,
                        struct xdg_activation_token_v1* token,
                        const char* name) {
   (void)token;
-  char** xdg_activation_token = data;
-  *xdg_activation_token = strdup(name);
+  char** out = data;
+  free(*out);
+  *out = strdup(name);
 }
 
 static const struct xdg_activation_token_v1_listener token_listener = {
-    .done = token_done};
+    .done = token_done,
+};
 
-void get_xdg_activation_token(struct seat* seat,
-                              const char* app_id,
-                              char** xdg_activation_token) {
-  struct wayl* wayl = seat->wayl;
-  if (wayl->xdg_activation_v1 == NULL) {
-    LOG_WARN("no xdg_activation_v1 manager");
-    return;
+char* wayl_activation_token(struct wayl* w) {
+  assert(!w->read_prepared);
+  if (w->xdg_activation_v1 == NULL) {
+    LOG_DEBUG("no xdg_activation_v1; not handing out a token");
+    return NULL;
   }
   struct xdg_activation_token_v1* token =
-      xdg_activation_v1_get_activation_token(wayl->xdg_activation_v1);
+      xdg_activation_v1_get_activation_token(w->xdg_activation_v1);
+  struct seat* seat = w->last_input;
+  if (seat != NULL && seat->wl_seat != NULL)
+    xdg_activation_token_v1_set_serial(token, seat->serial, seat->wl_seat);
+  xdg_activation_token_v1_set_surface(token, w->surface);
 
-  xdg_activation_token_v1_set_serial(token, seat->kbd.serial, seat->wl_seat);
-  xdg_activation_token_v1_set_surface(token, wayl->surface);
-
-  if (app_id != NULL)
-    xdg_activation_token_v1_set_app_id(token, app_id);
-
-  xdg_activation_token_v1_add_listener(token, &token_listener,
-                                       xdg_activation_token);
+  char* name = NULL;
+  xdg_activation_token_v1_add_listener(token, &token_listener, &name);
   xdg_activation_token_v1_commit(token);
-
-  if (wl_display_roundtrip_queue(wayl->display,
-                                 wayl->xdg_activation_v1_queue) == -1) {
-    LOG_WARN("failed to get xdg activation token");
-  }
-
+  if (wl_display_roundtrip_queue(w->display, w->xdg_activation_v1_queue) == -1)
+    LOG_WARN("failed to get an activation token");
   xdg_activation_token_v1_destroy(token);
+  return name;
 }
 
 /* ---- scale ---- */
@@ -185,7 +234,7 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 
 static void seat_emit_key(struct seat* seat, xkb_keycode_t keycode) {
   struct wayl* w = seat->wayl;
-  struct kb_result r = kb_resolve(w->kb, seat->kbd.xkb_state, keycode);
+  struct kb_result r = kb_resolve(w->kb, seat->xkb_state, keycode);
   if (r.bound || r.text[0] != '\0')
     w->listener->key(w->data, &r);
 }
@@ -196,7 +245,7 @@ static struct timespec ns_to_timespec(int64_t ns) {
 }
 
 static void repeat_stop(struct seat* seat) {
-  struct repeat* r = &seat->kbd.repeat;
+  struct repeat* r = &seat->repeat;
   r->key = 0;
   if (r->fd < 0)
     return;
@@ -211,25 +260,25 @@ static enum lm_err handle_key_repeat_ready(struct fdm* fdm, void* data) {
   struct seat* seat = data;
   uint64_t expcount = 0;
 
-  ssize_t n = read(seat->kbd.repeat.fd, &expcount, sizeof expcount);
+  ssize_t n = read(seat->repeat.fd, &expcount, sizeof expcount);
   if (n != sizeof expcount) {
     if (n == -1 && errno != EAGAIN)
       LOG_WARN("failed to read repeat timer: %s", strerror(errno));
     return LM_OK;
   }
 
-  if (seat->kbd.repeat.key == 0 || seat->kbd.xkb_state == NULL)
+  if (seat->repeat.key == 0 || seat->xkb_state == NULL)
     return LM_OK;
 
   /* One repeat however many ticks were missed: replaying them after the
    * loop was busy would fire a burst of keys, possibly past the release
    * that is already queued. */
-  seat_emit_key(seat, seat->kbd.repeat.key);
+  seat_emit_key(seat, seat->repeat.key);
   return LM_OK;
 }
 
 static bool repeat_ensure_fd(struct seat* seat) {
-  struct repeat* r = &seat->kbd.repeat;
+  struct repeat* r = &seat->repeat;
   if (r->fd >= 0)
     return true;
 
@@ -249,7 +298,7 @@ static bool repeat_ensure_fd(struct seat* seat) {
 }
 
 static void repeat_start(struct seat* seat, xkb_keycode_t keycode) {
-  struct repeat* r = &seat->kbd.repeat;
+  struct repeat* r = &seat->repeat;
   if (r->rate <= 0) /* compositor disabled key repeat */
     return;
   if (!repeat_ensure_fd(seat))
@@ -277,8 +326,8 @@ static void keyboard_handle_repeat(void* data,
   (void)wl_keyboard;
   struct seat* seat = data;
 
-  seat->kbd.repeat.rate = rate;
-  seat->kbd.repeat.delay = delay;
+  seat->repeat.rate = rate;
+  seat->repeat.delay = delay;
   if (rate <= 0)
     repeat_stop(seat);
 }
@@ -292,22 +341,23 @@ static void keyboard_handle_key(void* data,
   (void)wl_keyboard;
   (void)time;
   struct seat* seat = data;
-  seat->kbd.serial = serial;
 
   /* A keyboard may come without a keymap (or with one we can't use); its
    * keys can't be resolved, so they are ignored. */
-  if (seat->kbd.xkb_state == NULL)
+  if (seat->xkb_state == NULL)
     return;
 
   xkb_keycode_t keycode = key + 8; /* evdev -> XKB */
 
   if (state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+    seat->serial = serial;
+    seat->wayl->last_input = seat;
     seat_emit_key(seat, keycode);
     /* Modifiers etc. don't repeat and must not hijack an active repeat. */
-    if (xkb_keymap_key_repeats(seat->kbd.xkb_keymap, keycode))
+    if (xkb_keymap_key_repeats(seat->xkb_keymap, keycode))
       repeat_start(seat, keycode);
   } else if (state == WL_KEYBOARD_KEY_STATE_RELEASED) {
-    if (keycode == seat->kbd.repeat.key)
+    if (keycode == seat->repeat.key)
       repeat_stop(seat);
   }
 }
@@ -320,10 +370,10 @@ static void keyboard_handle_keymap(void* data,
   (void)wl_keyboard;
   struct seat* seat = data;
 
-  xkb_keymap_unref(seat->kbd.xkb_keymap);
-  seat->kbd.xkb_keymap = NULL;
-  xkb_state_unref(seat->kbd.xkb_state);
-  seat->kbd.xkb_state = NULL;
+  xkb_keymap_unref(seat->xkb_keymap);
+  seat->xkb_keymap = NULL;
+  xkb_state_unref(seat->xkb_state);
+  seat->xkb_state = NULL;
 
   if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
     LOG_WARN("keyboard has no xkb keymap (format %u); ignoring its keys",
@@ -354,8 +404,8 @@ static void keyboard_handle_keymap(void* data,
     seat->wayl->err = LM_ERR_FAILED_CREATE_STATE_FROM_KEYMAP;
     return;
   }
-  seat->kbd.xkb_keymap = keymap;
-  seat->kbd.xkb_state = xkb_state;
+  seat->xkb_keymap = keymap;
+  seat->xkb_state = xkb_state;
 }
 
 static void keyboard_handle_enter(void* data,
@@ -363,9 +413,9 @@ static void keyboard_handle_enter(void* data,
                                   uint32_t serial,
                                   struct wl_surface* surface,
                                   struct wl_array* keys) {
-  struct seat* seat = data;
-  seat->kbd.serial = serial;
+  (void)data;
   (void)wl_keyboard;
+  (void)serial;
   (void)surface;
   (void)keys;
 }
@@ -374,12 +424,10 @@ static void keyboard_handle_leave(void* data,
                                   struct wl_keyboard* wl_keyboard,
                                   uint32_t serial,
                                   struct wl_surface* surface) {
-  struct seat* seat = data;
-  seat->kbd.serial = 0;
-  repeat_stop(seat);
   (void)wl_keyboard;
   (void)serial;
   (void)surface;
+  repeat_stop(data);
 }
 
 static void keyboard_handle_modifiers(void* data,
@@ -392,9 +440,9 @@ static void keyboard_handle_modifiers(void* data,
   (void)serial;
   (void)wl_keyboard;
   struct seat* seat = data;
-  if (seat->kbd.xkb_state == NULL)
+  if (seat->xkb_state == NULL)
     return; /* no keymap: see keyboard_handle_key */
-  xkb_state_update_mask(seat->kbd.xkb_state, mods_depressed, mods_latched,
+  xkb_state_update_mask(seat->xkb_state, mods_depressed, mods_latched,
                         mods_locked, 0, 0, group);
 }
 
@@ -404,19 +452,13 @@ static const struct wl_keyboard_listener keyboard_listener = {
     .keymap = keyboard_handle_keymap,
     .enter = keyboard_handle_enter,
     .leave = keyboard_handle_leave,
-    .modifiers = keyboard_handle_modifiers};
+    .modifiers = keyboard_handle_modifiers,
+};
 
-/* ---- seat ---- */
+/* ---- seats ---- */
 
-static void seat_init(struct seat* s, struct wayl* w) {
-  *s = (struct seat){
-      .wayl = w,
-      .kbd.repeat = {.fd = -1},
-  };
-}
-
-/* Tear down the wl_keyboard and its xkb state. The repeat timerfd is kept
- * (just disarmed) so it can be reused if a keyboard comes back. */
+/* Tears down the seat's wl_keyboard and its xkb state. The repeat timerfd
+ * is kept (just disarmed) so it can be reused if a keyboard comes back. */
 static void seat_keyboard_destroy(struct seat* s) {
   repeat_stop(s);
 
@@ -428,37 +470,35 @@ static void seat_keyboard_destroy(struct seat* s) {
     s->wl_kbd = NULL;
   }
 
-  xkb_state_unref(s->kbd.xkb_state);
-  s->kbd.xkb_state = NULL;
-  xkb_keymap_unref(s->kbd.xkb_keymap);
-  s->kbd.xkb_keymap = NULL;
-  s->kbd.serial = 0;
+  xkb_state_unref(s->xkb_state);
+  s->xkb_state = NULL;
+  xkb_keymap_unref(s->xkb_keymap);
+  s->xkb_keymap = NULL;
 }
 
+/* Releases everything the seat holds and frees it; it must already be out
+ * of w->seats. */
 static void seat_destroy(struct seat* s) {
   seat_keyboard_destroy(s);
-
-  if (s->kbd.repeat.fd >= 0)
-    fdm_remove(s->wayl->fdm, s->kbd.repeat.fd); /* FDM_AUTOCLOSE closes it */
-
+  if (s->repeat.fd >= 0)
+    fdm_remove(s->wayl->fdm, s->repeat.fd); /* FDM_AUTOCLOSE closes it */
   if (s->wl_seat != NULL) {
     if (wl_seat_get_version(s->wl_seat) >= WL_SEAT_RELEASE_SINCE_VERSION)
       wl_seat_release(s->wl_seat);
     else
       wl_seat_destroy(s->wl_seat);
   }
-
-  free(s->name);
-  seat_init(s, s->wayl);
+  if (s->wayl->last_input == s)
+    s->wayl->last_input = NULL;
+  free(s);
 }
 
 static void seat_handle_name(void* data,
                              struct wl_seat* wl_seat,
                              const char* name) {
+  (void)data;
   (void)wl_seat;
-  struct seat* seat = data;
-  free(seat->name);
-  seat->name = strdup(name);
+  (void)name;
 }
 
 static void seat_handle_capabilities(void* data,
@@ -472,16 +512,30 @@ static void seat_handle_capabilities(void* data,
       seat->wl_kbd = wl_seat_get_keyboard(wl_seat);
       wl_keyboard_add_listener(seat->wl_kbd, &keyboard_listener, seat);
     }
-  } else {
-    if (seat->wl_kbd != NULL) {
-      seat_keyboard_destroy(seat);
-    }
+  } else if (seat->wl_kbd != NULL) {
+    seat_keyboard_destroy(seat);
   }
 }
 
 static const struct wl_seat_listener seat_listener = {
     .name = seat_handle_name,
-    .capabilities = seat_handle_capabilities};
+    .capabilities = seat_handle_capabilities,
+};
+
+static void seat_add(struct wayl* w,
+                     struct wl_registry* reg,
+                     uint32_t name,
+                     uint32_t version) {
+  struct seat* s = malloc(sizeof *s);
+  if (s == NULL || !LIST_PUSH(&w->seats, s)) {
+    LOG_WARN("allocation failed; ignoring a seat");
+    free(s);
+    return;
+  }
+  *s = (struct seat){.wayl = w, .wl_name = name, .repeat = {.fd = -1}};
+  s->wl_seat = wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 5));
+  wl_seat_add_listener(s->wl_seat, &seat_listener, s);
+}
 
 /* ---- registry ---- */
 
@@ -495,53 +549,41 @@ static void registry_global(void* data,
     /* v6 for wl_surface.preferred_buffer_scale */
     w->compositor =
         wl_registry_bind(reg, name, &wl_compositor_interface, MIN(version, 6));
-  }
-
-  else if (strcmp(iface, wl_shm_interface.name) == 0) {
+  } else if (strcmp(iface, wl_shm_interface.name) == 0) {
     w->shm = wl_registry_bind(reg, name, &wl_shm_interface, 1);
-  }
-
-  else if (strcmp(iface, xdg_wm_base_interface.name) == 0) {
-    w->wm_base = wl_registry_bind(reg, name, &xdg_wm_base_interface, 1);
-    xdg_wm_base_add_listener(w->wm_base, &wm_base_listener, w);
-  }
-
-  else if (strcmp(iface, wl_seat_interface.name) == 0) {
-    seat_destroy(&w->seat);
-    w->seat.wl_seat =
-        wl_registry_bind(reg, name, &wl_seat_interface, MIN(version, 5));
-    w->seat.wl_name = name;
-    wl_seat_add_listener(w->seat.wl_seat, &seat_listener, &w->seat);
-  }
-
-  else if (strcmp(iface, xdg_activation_v1_interface.name) == 0) {
+  } else if (strcmp(iface, wl_seat_interface.name) == 0) {
+    seat_add(w, reg, name, version);
+  } else if (strcmp(iface, xdg_activation_v1_interface.name) == 0) {
     w->xdg_activation_v1 =
         wl_registry_bind(reg, name, &xdg_activation_v1_interface, 1);
     wl_proxy_set_queue((struct wl_proxy*)w->xdg_activation_v1,
                        w->xdg_activation_v1_queue);
-  }
-
-  else if (strcmp(iface, wp_viewporter_interface.name) == 0) {
+  } else if (strcmp(iface, wp_viewporter_interface.name) == 0) {
     w->viewporter = wl_registry_bind(reg, name, &wp_viewporter_interface, 1);
-  }
-
-  else if (strcmp(iface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+  } else if (strcmp(iface, wp_fractional_scale_manager_v1_interface.name) ==
+             0) {
     w->fractional_scale_manager = wl_registry_bind(
         reg, name, &wp_fractional_scale_manager_v1_interface, 1);
-  }
-
-  else if (strcmp(iface, zwlr_layer_shell_v1_interface.name) == 0) {
-    w->layer_shell = wl_registry_bind(reg, name, &zwlr_layer_shell_v1_interface,
-                                      MIN(version, 1));
+  } else if (strcmp(iface, zwlr_layer_shell_v1_interface.name) == 0) {
+    w->layer_shell =
+        wl_registry_bind(reg, name, &zwlr_layer_shell_v1_interface, 1);
   }
 }
 
 static void registry_global_remove(void* data,
                                    struct wl_registry* reg,
                                    uint32_t name) {
-  (void)data;
   (void)reg;
-  (void)name;
+  struct wayl* w = data;
+  /* Only seats come and go; the other globals we use are for good. */
+  for (size_t i = 0; i < w->seats.len; i++) {
+    struct seat* s = w->seats.ptr[i];
+    if (s->wl_name == name) {
+      LIST_SWAP_REMOVE(&w->seats, i);
+      seat_destroy(s);
+      return;
+    }
+  }
 }
 
 static const struct wl_registry_listener registry_listener = {
@@ -559,10 +601,10 @@ static enum lm_err report_display_error(struct wl_display* display) {
     const struct wl_interface* interface = NULL;
     uint32_t id = 0;
     uint32_t code = wl_display_get_protocol_error(display, &interface, &id);
-    LOG_FATAL("Fatal Protocol Error: Interface %s, Object ID %u, Error Code %u",
+    LOG_FATAL("protocol error: interface %s, object %u, code %u",
               interface != NULL ? interface->name : "unknown", id, code);
   } else {
-    LOG_FATAL("Fatal Socket Error: %s", strerror(err ? err : errno));
+    LOG_FATAL("lost the display connection: %s", strerror(err ? err : errno));
   }
   return LM_ERR_DISPLAY;
 }
@@ -574,7 +616,7 @@ static enum lm_err handle_display_events(struct fdm* fdm, void* data) {
   if (!w->read_prepared)
     return LM_OK; /* not a reader right now; main loop will prepare again */
 
-  w->read_prepared = false; /* consumed by wayl_finish */
+  w->read_prepared = false; /* consumed: wayl_finish has nothing to cancel */
   if (wl_display_read_events(w->display) == -1)
     return report_display_error(w->display);
 
@@ -586,13 +628,25 @@ static enum lm_err handle_display_events(struct fdm* fdm, void* data) {
 
 /* ---- public ---- */
 
-int wayl_init(struct wayl* w,
-              struct fdm* fdm,
-              struct kb_manager* kb,
-              const struct wayl_listener* listener,
-              void* data,
-              const char* title) {
+/* Fails wayl_new: logs why, tears down what was set up. */
+static struct wayl* fail(struct wayl* w, const char* why) {
+  LOG_FATAL("%s", why);
+  wayl_destroy(w);
+  return NULL;
+}
+
+struct wayl* wayl_new(struct fdm* fdm,
+                      struct kb_manager* kb,
+                      const struct wayl_listener* listener,
+                      void* data,
+                      const char* namespace) {
+  struct wayl* w = malloc(sizeof *w);
+  if (w == NULL) {
+    LOG_FATAL("allocation failed");
+    return NULL;
+  }
   *w = (struct wayl){
+      .seats = LIST_INIT,
       .fdm = fdm,
       .kb = kb,
       .display_fd = -1,
@@ -602,55 +656,39 @@ int wayl_init(struct wayl* w,
       .listener = listener,
       .data = data,
   };
-  seat_init(&w->seat, w);
 
   w->xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-  if (w->xkb_ctx == NULL) {
-    LOG_FATAL("failed to create xkb context");
-    return -1;
-  }
+  if (w->xkb_ctx == NULL)
+    return fail(w, "failed to create an xkb context");
 
   w->display = wl_display_connect(NULL);
-  if (!w->display) {
-    LOG_FATAL("Can't connect to a Wayland display");
-    return -1;
-  }
+  if (w->display == NULL)
+    return fail(w, "can't connect to a Wayland display");
 
   w->xdg_activation_v1_queue = wl_display_create_queue(w->display);
-  if (w->xdg_activation_v1_queue == NULL) {
-    LOG_ERROR("failed to create wl xdg_activation_v1 queue");
-    return -1;
-  }
+  if (w->xdg_activation_v1_queue == NULL)
+    return fail(w, "failed to create an event queue");
 
   w->registry = wl_display_get_registry(w->display);
   wl_registry_add_listener(w->registry, &registry_listener, w);
-  wl_display_roundtrip(w->display); /* receive the globals */
-
-  if (!w->compositor) {
-    LOG_FATAL("Compositor lacks wl_compositor");
-    return -1;
+  if (wl_display_roundtrip(w->display) == -1) { /* receive the globals */
+    report_display_error(w->display);
+    return fail(w, "failed to read the compositor's globals");
   }
 
-  if (!w->shm) {
-    LOG_FATAL("Compositor lacks wl_shm");
-    return -1;
-  }
-
-  if (!w->wm_base) {
-    LOG_FATAL("Compositor lacks xdg_wm_base");
-    return -1;
-  }
-
-  if (!w->layer_shell) {
-    LOG_FATAL("Compositor zwlr_layer_shell");
-    return -1;
-  }
+  if (w->compositor == NULL)
+    return fail(w, "the compositor lacks wl_compositor");
+  if (w->shm == NULL)
+    return fail(w, "the compositor lacks wl_shm");
+  if (w->layer_shell == NULL)
+    return fail(w,
+                "the compositor lacks zwlr_layer_shell_v1: lm10 needs one "
+                "with wlr-layer-shell, such as sway, Hyprland, KDE Plasma, "
+                "niri or river");
 
   w->surface = wl_compositor_create_surface(w->compositor);
-  if (!w->surface) {
-    LOG_FATAL("failed to create surface");
-    return -1;
-  }
+  if (w->surface == NULL)
+    return fail(w, "failed to create a surface");
   wl_surface_add_listener(w->surface, &surface_listener, w);
 
   if (w->viewporter && w->fractional_scale_manager) {
@@ -663,11 +701,9 @@ int wayl_init(struct wayl* w,
 
   w->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
       w->layer_shell, w->surface, NULL, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
-      title);
-  if (!w->layer_surface) {
-    LOG_FATAL("failed to create layer surface");
-    return -1;
-  }
+      namespace);
+  if (w->layer_surface == NULL)
+    return fail(w, "failed to create a layer surface");
 
   zwlr_layer_surface_v1_add_listener(w->layer_surface, &layer_surface_listener,
                                      w);
@@ -686,23 +722,24 @@ int wayl_init(struct wayl* w,
 
   int fd = wl_display_get_fd(w->display);
   if (fdm_add(fdm, fd, EPOLLIN | EPOLLRDHUP | EPOLLPRI | EPOLLERR | EPOLLHUP,
-              handle_display_events, w, 0) != 0) {
-    LOG_FATAL("failed to add display fd to fdm: %s",
-              errno ? strerror(errno) : "");
-    return -1;
-  }
+              handle_display_events, w, 0) != 0)
+    return fail(w, "failed to watch the display fd");
   w->display_fd = fd;
-
-  return 0;
+  return w;
 }
 
 void wayl_destroy(struct wayl* w) {
-  if (w->read_prepared) {
+  if (w == NULL)
+    return;
+  if (w->read_prepared)
     wl_display_cancel_read(w->display);
-    w->read_prepared = false;
-  }
 
-  seat_destroy(&w->seat);
+  while (w->seats.len > 0) {
+    struct seat* s = w->seats.ptr[w->seats.len - 1];
+    LIST_POP(&w->seats);
+    seat_destroy(s);
+  }
+  LIST_FREE(&w->seats);
   xkb_context_unref(w->xkb_ctx);
 
   if (w->display_fd >= 0)
@@ -725,8 +762,6 @@ void wayl_destroy(struct wayl* w) {
     wp_viewporter_destroy(w->viewporter);
   if (w->surface)
     wl_surface_destroy(w->surface);
-  if (w->wm_base)
-    xdg_wm_base_destroy(w->wm_base);
   if (w->shm)
     wl_shm_destroy(w->shm);
   if (w->compositor)
@@ -735,8 +770,19 @@ void wayl_destroy(struct wayl* w) {
     wl_registry_destroy(w->registry);
   if (w->display)
     wl_display_disconnect(w->display);
+  free(w);
+}
 
-  *w = (struct wayl){.display_fd = -1};
+struct wl_shm* wayl_shm(const struct wayl* w) {
+  return w->shm;
+}
+
+struct wl_surface* wayl_surface(const struct wayl* w) {
+  return w->surface;
+}
+
+enum lm_err wayl_error(const struct wayl* w) {
+  return w->err;
 }
 
 enum lm_err wayl_prepare(struct wayl* w) {
