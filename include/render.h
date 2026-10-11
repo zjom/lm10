@@ -3,12 +3,27 @@
 
 #include "config.h"
 #include "draw.h"
-#include "frame.h"
 #include "state.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
+
+#include <cairo.h>
 #include <wayland-client-protocol.h>
+
+struct render;
+
+/* One shm-backed wl_buffer plus a cairo surface over the same memory. */
+struct frame {
+  struct render* r;  // presents again once the compositor releases it
+  struct wl_buffer* buffer;
+  uint32_t* data;  // mmap'd, kept mapped for the frame's lifetime
+  size_t size;
+  int width, height;    // in buffer pixels (logical * scale)
+  cairo_surface_t* cs;  // created once, reused for every draw
+  bool busy;            // set on commit, cleared in wl_buffer.release
+};
 
 /* Presents the state on a wl_surface: owns the buffer pool and paces redraws
  * with frame callbacks. */
@@ -19,9 +34,11 @@ struct render {
   struct frame frames[2];
   int width, height;  // target size in surface-local (logical) pixels
   uint32_t scale120;  // buffer pixels per logical pixel, in 120ths
-  bool dirty;  // something besides the state changed since the last commit
+  /* Something besides the state changed since the last commit, or a commit
+   * is due anyway (a configure must be answered with one). */
+  bool dirty;
   struct state* state;  // sorted before it is drawn
-  uint64_t drawn_gen;  // state->gen when it was last drawn
+  uint64_t drawn_gen;   // state->gen when it was last drawn
   struct draw_ctx dctx;
 };
 
@@ -41,13 +58,9 @@ void render_resize(struct render* r, int w, int h);
  * tracks the logical size. */
 void render_set_scale(struct render* r, uint32_t scale120);
 
-/* Forces the next present to commit, even if nothing changed. */
-void render_invalidate(struct render* r);
-
-/* Presents now if the state changed since it was last drawn (or the
- * render was invalidated, resized or rescaled) and a buffer and the frame
- * slot are free; otherwise a pending frame/release callback presents
- * later. */
+/* Presents now if the state changed since it was last drawn (or r->dirty
+ * is set) and a buffer and the frame slot are free; otherwise a pending
+ * frame or release callback presents later. */
 void render_request(struct render* r);
 
 #endif  // !LM_RENDER_H

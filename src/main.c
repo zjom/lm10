@@ -110,8 +110,7 @@ static void on_entries(void* data) {
 
 /* ---- wayl callbacks ---- */
 
-static void on_size(void* data, int out_w, int out_h, int* w, int* h) {
-  struct app* app = data;
+void app_size(struct app* app, int out_w, int out_h, int* w, int* h) {
   const struct config_ui* ui = &app->config.ui;
   int want_w = ui->width_percent ? out_w * ui->width / 100 : ui->width;
   int want_h = draw_height(&app->render.dctx, &app->state);
@@ -119,22 +118,19 @@ static void on_size(void* data, int out_w, int out_h, int* w, int* h) {
   *h = want_h < out_h ? want_h : out_h;
 }
 
-static void on_configure(void* data, int w, int h) {
-  struct app* app = data;
+void app_configure(struct app* app, int w, int h) {
   render_resize(&app->render, w, h);
   /* configure must be answered with a commit, even if nothing changed */
-  render_invalidate(&app->render);
+  app->render.dirty = true;
   render_request(&app->render);
 }
 
-static void on_scale(void* data, uint32_t scale120) {
-  struct app* app = data;
+void app_scale(struct app* app, uint32_t scale120) {
   render_set_scale(&app->render, scale120);
   render_request(&app->render);
 }
 
-static void on_close(void* data) {
-  struct app* app = data;
+void app_close(struct app* app) {
   app->running = false;
 }
 
@@ -255,8 +251,7 @@ static void run_actions(struct app* app, const ActionList* actions) {
   }
 }
 
-static void on_key(void* data, const struct kb_result* key) {
-  struct app* app = data;
+void app_key(struct app* app, const struct kb_result* key) {
   /* Once the loop is stopping, keys already queued (or repeating) must not
    * touch the state: a picked entry points into it. */
   if (!app->running)
@@ -270,14 +265,6 @@ static void on_key(void* data, const struct kb_result* key) {
   if (app->running)
     render_request(&app->render);
 }
-
-static const struct wayl_listener wayl_listener = {
-    .size = on_size,
-    .configure = on_configure,
-    .close = on_close,
-    .scale = on_scale,
-    .key = on_key,
-};
 
 /* ---- main ---- */
 
@@ -467,14 +454,14 @@ int main(int argc, char** argv) {
   state_set_border_label(&app.state, sb_str(&ui->border_label));
   state_set_fuzzy(&app.state, ui->fuzzy);
 
-  app.wayl = wayl_new(&app.fdm, &wayl_listener, &app, "lm10");
+  app.wayl = wayl_new(&app.fdm, &app, "lm10");
   if (app.wayl == NULL) {
     err = 1;
     goto cleanup;
   }
 
   /* Before the first configure is dispatched: on_size measures with it. */
-  if (render_init(&app.render, wayl_shm(app.wayl), wayl_surface(app.wayl),
+  if (render_init(&app.render, app.wayl->shm, app.wayl->surface,
                   &app.state, &app.config.ui) != 0) {
     err = 1;
     goto cleanup;

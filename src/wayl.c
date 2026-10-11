@@ -16,7 +16,6 @@
 
 #include "log.h"
 #include "util.h"
-#include "ztd_arr.h"
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
@@ -36,48 +35,6 @@ struct seat {
   struct xkb_keymap* xkb_keymap;
   struct xkb_state* xkb_state;
   struct repeat repeat;
-};
-
-typedef LIST(struct seat*) SeatList;
-
-struct wayl {
-  struct wl_display* display;
-  struct wl_registry* registry;
-  struct wl_compositor* compositor;
-  struct wl_shm* shm;
-  struct wl_surface* surface;
-  struct zwlr_layer_shell_v1* layer_shell;
-  struct zwlr_layer_surface_v1* layer_surface;
-  struct xkb_context* xkb_ctx;
-  /* Activation tokens are fetched with a roundtrip on a queue of their own,
-   * so it doesn't dispatch anything else. */
-  struct wl_event_queue* xdg_activation_v1_queue;
-  struct xdg_activation_v1* xdg_activation_v1;
-  /* Optional: with both, the surface gets fractional scales; otherwise only
-   * integer ones from wl_surface.preferred_buffer_scale (wl_compositor v6). */
-  struct wp_viewporter* viewporter;
-  struct wp_fractional_scale_manager_v1* fractional_scale_manager;
-  struct wp_viewport* viewport;
-  struct wp_fractional_scale_v1* fractional_scale;
-  SeatList seats;           // heap-allocated, as listeners point at them
-  struct seat* last_input;  // the seat of the last key press, or NULL
-  struct fdm* fdm;
-  int display_fd;         // -1 until registered with fdm
-
-  int32_t width, height;  // last configured logical size
-  uint32_t scale120;      // preferred scale in 120ths
-
-  /* false until the first configure (full output, all edges anchored) has
-   * been answered with our centered size. */
-  bool sized;
-
-  /* true between a successful wl_display_prepare_read() and its matching
-   * wl_display_read_events() / wl_display_cancel_read(). */
-  bool read_prepared;
-
-  const struct wayl_listener* listener;
-  void* data;
-
 };
 
 /* ---- activation tokens ---- */
@@ -123,7 +80,7 @@ static void set_scale(struct wayl* w, uint32_t scale120) {
   if (scale120 == 0 || scale120 == w->scale120)
     return;
   w->scale120 = scale120;
-  w->listener->scale(w->data, scale120);
+  app_scale(w->app, scale120);
 }
 
 static void fractional_scale_preferred(void* data,
@@ -194,7 +151,7 @@ static void layer_surface_configure(void* data,
      * without a buffer and wait for the configure that carries our size. */
     if (w > 0 && h > 0) {
       int sw = wayl->width, sh = wayl->height;
-      wayl->listener->size(wayl->data, (int)w, (int)h, &sw, &sh);
+      app_size(wayl->app, (int)w, (int)h, &sw, &sh);
       wayl->width = sw;
       wayl->height = sh;
     }
@@ -214,14 +171,14 @@ static void layer_surface_configure(void* data,
   /* Double-buffered: lands with the buffer the app commits in response. */
   if (wayl->viewport)
     wp_viewport_set_destination(wayl->viewport, wayl->width, wayl->height);
-  wayl->listener->configure(wayl->data, wayl->width, wayl->height);
+  app_configure(wayl->app, wayl->width, wayl->height);
 }
 
 static void layer_surface_closed(void* data,
                                  struct zwlr_layer_surface_v1* surface) {
   struct wayl* wayl = data;
   (void)surface;
-  wayl->listener->close(wayl->data);
+  app_close(wayl->app);
 }
 
 static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
@@ -235,7 +192,7 @@ static void seat_emit_key(struct seat* seat, xkb_keycode_t keycode) {
   struct wayl* w = seat->wayl;
   struct kb_result r = kb_resolve(seat->xkb_state, keycode);
   if (r.n_keys > 0 || r.text[0] != '\0')
-    w->listener->key(w->data, &r);
+    app_key(w->app, &r);
 }
 
 static struct timespec ns_to_timespec(int64_t ns) {
@@ -616,8 +573,7 @@ static struct wayl* fail(struct wayl* w, const char* why) {
 }
 
 struct wayl* wayl_new(struct fdm* fdm,
-                      const struct wayl_listener* listener,
-                      void* data,
+                      struct app* app,
                       const char* namespace) {
   struct wayl* w = xmalloc(sizeof *w);
   *w = (struct wayl){
@@ -627,8 +583,7 @@ struct wayl* wayl_new(struct fdm* fdm,
       .width = 640,
       .height = 480,
       .scale120 = 120,
-      .listener = listener,
-      .data = data,
+      .app = app,
   };
 
   w->xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
@@ -743,14 +698,6 @@ void wayl_destroy(struct wayl* w) {
   if (w->display)
     wl_display_disconnect(w->display);
   free(w);
-}
-
-struct wl_shm* wayl_shm(const struct wayl* w) {
-  return w->shm;
-}
-
-struct wl_surface* wayl_surface(const struct wayl* w) {
-  return w->surface;
 }
 
 void wayl_prepare(struct wayl* w) {

@@ -89,7 +89,6 @@ core_srcs = files(
   'src/draw.c',
   'src/entry_parse.c',
   'src/fdm.c',
-  'src/frame.c',
   'src/input.c',
   'src/kb.c',
   'src/render.c',
