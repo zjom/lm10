@@ -25,9 +25,14 @@ struct state_entry {
 };
 
 typedef LIST(struct state_entry) StateEntryList;
-typedef LIST(size_t) IndexList;
 typedef LIST(uint32_t) CodepointList;
-typedef LIST(int32_t) ScoreList;
+
+/* An entry that matches the query, and how well (fuzzy only). */
+struct state_match {
+  size_t entry;  // index into entries
+  int32_t score;
+};
+typedef LIST(struct state_match) MatchList;
 
 /* A byte range of a name, e.g. where it matched the query. */
 struct state_span {
@@ -46,10 +51,8 @@ struct state {
    * ignoring case, as a substring, or with fuzzy as a subsequence. */
   CodepointList needle;  // heap-backed
   bool fuzzy;
-  /* Indices into entries: in entry order, or with fuzzy the best match
-   * first, with the score of each in scores. Heap-backed. */
-  IndexList matches;
-  ScoreList scores;
+  /* In entry order, or with fuzzy the best match first. Heap-backed. */
+  MatchList matches;
   size_t selected;  // index into matches
   /* Texts drawn around the query; actions can change them. Heap-backed. */
   StrBuf prompt;

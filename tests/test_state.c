@@ -167,9 +167,8 @@ static void test_fuzzy(void) {
   check_spans(&st, 0, "0+1 4+1");
   check_spans(&st, 2, "0+1 8+1");
   check_spans(&st, 4, "1+2");  // one run: fb in xfb
-  CHECK(st.scores.len == st.matches.len);
-  for (size_t i = 1; i < st.scores.len; i++)
-    CHECK(st.scores.ptr[i - 1] >= st.scores.ptr[i]);
+  for (size_t i = 1; i < st.matches.len; i++)
+    CHECK(st.matches.ptr[i - 1].score >= st.matches.ptr[i].score);
 
   /* Narrowing keeps the ranking right. */
   CHECK(state_query_insert(&st, STR("r")));

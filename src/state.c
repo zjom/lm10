@@ -12,7 +12,6 @@ void state_init(struct state* state) {
       .query = STRBUF_INIT,
       .needle = LIST_INIT,
       .matches = LIST_INIT,
-      .scores = LIST_INIT,
       .prompt = STRBUF_INIT,
       .header = STRBUF_INIT,
       .border_label = STRBUF_INIT,
@@ -25,7 +24,6 @@ void state_destroy(struct state* state) {
   sb_free(&state->query);
   LIST_FREE(&state->needle);
   LIST_FREE(&state->matches);
-  LIST_FREE(&state->scores);
   sb_free(&state->prompt);
   sb_free(&state->header);
   sb_free(&state->border_label);
@@ -220,26 +218,17 @@ static bool matches(const struct state* state, size_t entry, int32_t* score) {
   return find_substring(name, &state->needle, NULL);
 }
 
-/* Lowercases the query into the needle. Returns false on allocation
- * failure. */
-static bool fold_query(struct state* state) {
+/* Lowercases the query into the needle. */
+static void fold_query(struct state* state) {
   LIST_CLEAR(&state->needle);
   const char* end = state->query.ptr + state->query.len;
-  for (const char* p = state->query.ptr; p < end; p = g_utf8_next_char(p)) {
-    if (!LIST_PUSH(&state->needle, fold(p)))
-      return false;
-  }
-  return true;
+  for (const char* p = state->query.ptr; p < end; p = g_utf8_next_char(p))
+    LIST_PUSH(&state->needle, fold(p));
 }
 
-struct ranked {
-  size_t entry;
-  int32_t score;
-};
-
 /* Better scores first, then entry order. */
-static int compare_ranked(const void* a, const void* b) {
-  const struct ranked *x = a, *y = b;
+static int compare_match(const void* a, const void* b) {
+  const struct state_match *x = a, *y = b;
   if (x->score != y->score)
     return x->score > y->score ? -1 : 1;
   return x->entry < y->entry ? -1 : x->entry > y->entry;
@@ -248,60 +237,47 @@ static int compare_ranked(const void* a, const void* b) {
 /* Recomputes the matches after a query change and selects the first. If
  * narrowing, the query only gained characters at its end, so the matches
  * can only shrink: just the current ones are checked. */
-static bool refilter(struct state* state, bool narrowing) {
+static void refilter(struct state* state, bool narrowing) {
   state->selected = 0;
   state->gen++;
-  if (!fold_query(state))
-    return false;
-
-  /* Candidates, then the ones that match. */
-  size_t n = narrowing ? state->matches.len : state->entries.len;
-  struct ranked* ranked = NULL;
-  if (n > 0 && (ranked = malloc(n * sizeof *ranked)) == NULL)
-    return false;
+  fold_query(state);
+  if (!narrowing) {
+    LIST_CLEAR(&state->matches);
+    LIST_RESERVE(&state->matches, state->entries.len);
+    for (size_t i = 0; i < state->entries.len; i++)
+      LIST_PUSH(&state->matches, ((struct state_match){i, 0}));
+  }
   size_t kept = 0;
-  for (size_t i = 0; i < n; i++) {
-    size_t entry = narrowing ? state->matches.ptr[i] : i;
-    int32_t score;
-    if (matches(state, entry, &score))
-      ranked[kept++] = (struct ranked){entry, score};
+  for (size_t i = 0; i < state->matches.len; i++) {
+    struct state_match m = state->matches.ptr[i];
+    if (matches(state, m.entry, &m.score))
+      state->matches.ptr[kept++] = m;
   }
+  state->matches.len = kept;
   if (state->fuzzy && state->needle.len > 0)
-    qsort(ranked, kept, sizeof *ranked, compare_ranked);
-
-  LIST_CLEAR(&state->matches);
-  LIST_CLEAR(&state->scores);
-  bool ok =
-      LIST_RESERVE(&state->matches, kept) && LIST_RESERVE(&state->scores, kept);
-  for (size_t i = 0; ok && i < kept; i++) {
-    LIST_PUSH(&state->matches, ranked[i].entry);
-    LIST_PUSH(&state->scores, ranked[i].score);
-  }
-  free(ranked);
-  return ok;
+    qsort(state->matches.ptr, kept, sizeof *state->matches.ptr, compare_match);
 }
 
 /* Adds a new entry (the last one) to the matches if it matches, in its
  * place by score. The selection stays where it is. */
-static bool add_match(struct state* state, size_t entry) {
+static void add_match(struct state* state, size_t entry) {
   int32_t score;
   if (!matches(state, entry, &score))
-    return true;
+    return;
   size_t at = state->matches.len;
   if (state->fuzzy && state->needle.len > 0) {
     /* After every score at least as good: ties keep entry order. */
     size_t lo = 0, hi = state->matches.len;
     while (lo < hi) {
       size_t mid = lo + (hi - lo) / 2;
-      if (state->scores.ptr[mid] >= score)
+      if (state->matches.ptr[mid].score >= score)
         lo = mid + 1;
       else
         hi = mid;
     }
     at = lo;
   }
-  return LIST_INSERT(&state->matches, at, entry) &&
-         LIST_INSERT(&state->scores, at, score);
+  LIST_INSERT(&state->matches, at, ((struct state_match){entry, score}));
 }
 
 void state_set_fuzzy(struct state* state, bool fuzzy) {
@@ -379,14 +355,14 @@ bool state_push(struct state* state,
     return false;
   state->gen++;
 
-  return add_match(state, state->entries.len - 1);
+  add_match(state, state->entries.len - 1);
+  return true;
 }
 
 void state_clear_entries(struct state* state) {
   arena_reset(&state->arena);
   state->entries = (StateEntryList)LIST_INIT_ARENA(&state->arena);
   LIST_CLEAR(&state->matches);
-  LIST_CLEAR(&state->scores);
   state->selected = 0;
   state->gen++;
 }
@@ -447,7 +423,9 @@ bool state_query_insert(struct state* state, Str text) {
   if (ok)
     state->cursor += valid.len;
   sb_free(&valid);
-  return ok && refilter(state, at_end);
+  if (ok)
+    refilter(state, at_end);
+  return ok;
 }
 
 bool state_query_delete(struct state* state, enum state_motion motion) {
@@ -464,7 +442,8 @@ bool state_query_delete(struct state* state, enum state_motion motion) {
   memmove(q + a, q + b, len - b);
   sb_truncate(&state->query, len - (b - a));
   state->cursor = a;
-  return refilter(state, false);
+  refilter(state, false);
+  return true;
 }
 
 bool state_query_clear(struct state* state) {
@@ -472,13 +451,15 @@ bool state_query_clear(struct state* state) {
     return true;
   sb_clear(&state->query);
   state->cursor = 0;
-  return refilter(state, false);
+  refilter(state, false);
+  return true;
 }
 
 bool state_query_set(struct state* state, Str text) {
   bool ok = set_utf8(&state->query, text);
   state->cursor = state->query.len;
-  return refilter(state, false) && ok;
+  refilter(state, false);
+  return ok;
 }
 
 void state_cursor_move(struct state* state, enum state_motion motion) {
@@ -527,7 +508,7 @@ void state_select_prev(struct state* state) {
 }
 
 const struct state_entry* state_match(const struct state* state, size_t i) {
-  return &state->entries.ptr[state->matches.ptr[i]];
+  return &state->entries.ptr[state->matches.ptr[i].entry];
 }
 
 bool state_match_spans(const struct state* state, size_t i, SpanList* spans) {
