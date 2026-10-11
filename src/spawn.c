@@ -167,25 +167,23 @@ static void drop(struct proc* p) {
   free(p);
 }
 
-static enum lm_err on_pidfd(struct fdm* fdm, void* data) {
+static void on_pidfd(struct fdm* fdm, void* data) {
   (void)fdm;
   struct proc* p = data;
   pid_t r;
   while ((r = waitpid(p->pid, NULL, WNOHANG)) == -1 && errno == EINTR)
     ;
   if (r == 0)
-    return LM_OK;  // not yet
+    return;  // not yet
   drop(p);
-  return LM_OK;
 }
 
-static enum lm_err on_kill_timer(struct fdm* fdm, void* data) {
+static void on_kill_timer(struct fdm* fdm, void* data) {
   struct proc* p = data;
   LOG_WARN("process %d ignored SIGTERM; killing it", (int)p->pid);
   kill(-p->pid, SIGKILL);
   fdm_remove(fdm, p->timerfd);
   p->timerfd = -1;
-  return LM_OK;
 }
 
 void procs_init(struct procs* ps, struct fdm* fdm) {

@@ -1,7 +1,11 @@
 #include "frame.h"
 
+#include <errno.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+
+#include "util.h"
 
 static void buffer_release(void* data, struct wl_buffer* buffer) {
   (void)buffer;
@@ -14,37 +18,28 @@ static const struct wl_buffer_listener buffer_listener = {
     .release = buffer_release,
 };
 
-enum lm_err frame_init(struct frame* f,
-                       struct wl_shm* shm,
-                       int w,
-                       int h,
-                       frame_release_fn on_release,
-                       void* data) {
-  *f = (struct frame){0};
+void frame_init(struct frame* f,
+                struct wl_shm* shm,
+                int w,
+                int h,
+                frame_release_fn on_release,
+                void* data) {
   int stride = w * 4;
   size_t size = (size_t)stride * h;
 
   int fd = memfd_create("lm10-shm", MFD_CLOEXEC);
-  if (fd < 0 || ftruncate(fd, size) < 0) {
-    if (fd >= 0)
-      close(fd);
-    return LM_ERR_SHM;
-  }
+  if (fd < 0 || ftruncate(fd, size) < 0)
+    die("shm buffer %dx%d: %s", w, h, strerror(errno));
 
   uint32_t* px = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if (px == MAP_FAILED) {
-    close(fd);
-    return LM_ERR_MMAP;
-  }
+  if (px == MAP_FAILED)
+    die("shm buffer mmap: %s", strerror(errno));
 
   cairo_surface_t* cs = cairo_image_surface_create_for_data(
       (unsigned char*)px, CAIRO_FORMAT_ARGB32, w, h, stride);
-  if (cairo_surface_status(cs) != CAIRO_STATUS_SUCCESS) {
-    cairo_surface_destroy(cs);
-    munmap(px, size);
-    close(fd);
-    return LM_ERR_CAIRO;
-  }
+  cairo_status_t status = cairo_surface_status(cs);
+  if (status != CAIRO_STATUS_SUCCESS)
+    die("cairo surface %dx%d: %s", w, h, cairo_status_to_string(status));
 
   struct wl_shm_pool* pool = wl_shm_create_pool(shm, fd, size);
   struct wl_buffer* buf =
@@ -65,7 +60,6 @@ enum lm_err frame_init(struct frame* f,
   };
   /* f must stay at this address while the buffer exists. */
   wl_buffer_add_listener(buf, &buffer_listener, f);
-  return LM_OK;
 }
 
 void frame_destroy(struct frame* f) {

@@ -42,7 +42,7 @@ static bool read_some(struct input* in, bool* pushed) {
   return false;
 }
 
-static enum lm_err on_readable(struct fdm* fdm, void* data) {
+static void on_readable(struct fdm* fdm, void* data) {
   (void)fdm;
   struct input* in = data;
   bool pushed = false;
@@ -52,7 +52,6 @@ static enum lm_err on_readable(struct fdm* fdm, void* data) {
     stop(in, true);
   if (pushed && in->on_change)
     in->on_change(in->data);
-  return LM_OK;
 }
 
 int input_init(struct input* in,

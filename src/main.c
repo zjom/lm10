@@ -19,7 +19,6 @@
 #include <unistd.h>
 
 #include "action.h"
-#include "common.h"
 #include "config.h"
 #include "fdm.h"
 #include "input.h"
@@ -416,7 +415,7 @@ static bool load_config(struct config* cfg,
 int main(int argc, char** argv) {
   int err = 0;
   char* token = NULL;  // activation token for the picked entry
-  bool fdm_ok = false, render_ok = false, input_ok = false;
+  bool render_ok = false, input_ok = false;
   const char* config_path = NULL;
   /* config flags, in order; there are fewer than argc of them */
   struct flag* flags = xcalloc((size_t)argc, sizeof(*flags));
@@ -471,12 +470,8 @@ int main(int argc, char** argv) {
   config_init(&app.config);
   state_init(&app.state);
 
-  if (fdm_init(&app.fdm) != 0) {
-    LOG_FATAL("failed to init fdm");
-    err = 1;
-    goto cleanup;
-  }
-  fdm_ok = true;
+  if (fdm_init(&app.fdm) != 0)
+    die("epoll_create: %s", strerror(errno));
   procs_init(&app.procs, &app.fdm);
 
   bool config_ok = load_config(&app.config, config_path, flags, n_flags);
@@ -526,31 +521,10 @@ int main(int argc, char** argv) {
   unsetenv("DESKTOP_STARTUP_ID");
 
   while (app.running) {
-    if (wayl_prepare(app.wayl) != LM_OK) {
-      err = 1;
-      goto cleanup;
-    }
-
-    if (!app.running) {  // a dispatched event may have asked us to quit
-      wayl_finish(app.wayl);
-      break;
-    }
-
-    enum lm_err wait_err = fdm_wait(&app.fdm);
+    wayl_prepare(app.wayl);
+    if (app.running)  // a dispatched event may have asked us to quit
+      fdm_wait(&app.fdm);
     wayl_finish(app.wayl);
-    if (wait_err != LM_OK) {  // already logged
-      err = 1;
-      goto cleanup;
-    }
-
-    enum lm_err e = wayl_error(app.wayl);
-    if (e == LM_OK)
-      e = app.render.err;
-    if (e != LM_OK) {
-      LOG_ERROR("app error: %s", lm_strerror(e));
-      err = e;
-      goto cleanup;
-    }
   }
 
   /* Not from inside the loop: getting the token takes a roundtrip, which
@@ -565,10 +539,8 @@ cleanup:
     render_destroy(&app.render);  // before wayl: uses its surface and shm
   wayl_destroy(app.wayl);
   kb_manager_destroy(app.kb);  // after wayl: it looks keys up in it
-  if (fdm_ok) {
-    procs_destroy(&app.procs);  // after input: it terminates through procs
-    fdm_destroy(&app.fdm);
-  }
+  procs_destroy(&app.procs);  // after input: it terminates through procs
+  fdm_destroy(&app.fdm);
   if (err == 0 && app.pending != NULL && !run_entry(app.pending, token))
     err = 1;  // the entry lives in state, which is still alive
   free(token);

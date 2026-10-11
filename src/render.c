@@ -4,7 +4,7 @@
 
 #include "log.h"
 
-static int try_present(struct render* r);
+static void try_present(struct render* r);
 
 static void frame_done(void* data, struct wl_callback* cb, uint32_t time) {
   (void)time;
@@ -40,26 +40,20 @@ static struct frame* acquire_frame(struct render* r) {
     /* Free but missing or the wrong size: safe to replace, since the
      * compositor doesn't hold it. */
     frame_destroy(f);
-    enum lm_err e = frame_init(f, r->shm, bw, bh, on_frame_release, r);
-    if (e != LM_OK) {
-      r->err = e;
-      return NULL;
-    }
+    frame_init(f, r->shm, bw, bh, on_frame_release, r);
     return f;
   }
   return NULL;  // all busy; a release will retry
 }
 
-static int try_present(struct render* r) {
-  if (r->err != LM_OK)
-    return -1;
+static void try_present(struct render* r) {
   bool stale = r->dirty || r->state->gen != r->drawn_gen;
   if (!stale || r->frame_cb != NULL || r->width <= 0 || r->height <= 0)
-    return 0;
+    return;
 
   struct frame* f = acquire_frame(r);
   if (f == NULL)
-    return r->err != LM_OK ? -1 : 0;
+    return;
 
   /* Draw in logical units; cairo and pango render at buffer resolution. */
   cairo_t* cr = cairo_create(f->cs);
@@ -83,7 +77,6 @@ static int try_present(struct render* r) {
 
   r->dirty = false;
   r->drawn_gen = r->state->gen;
-  return 0;
 }
 
 int render_init(struct render* r,
@@ -133,6 +126,6 @@ void render_invalidate(struct render* r) {
   r->dirty = true;
 }
 
-int render_request(struct render* r) {
-  return try_present(r);
+void render_request(struct render* r) {
+  try_present(r);
 }

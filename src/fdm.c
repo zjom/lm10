@@ -6,7 +6,6 @@
 #include <sys/epoll.h>
 #include <unistd.h>
 
-#include "log.h"
 #include "util.h"
 
 struct fdm_watch {
@@ -99,24 +98,21 @@ void fdm_remove(struct fdm* fdm, int fd) {
     sweep(fdm);
 }
 
-enum lm_err fdm_wait(struct fdm* fdm) {
+void fdm_wait(struct fdm* fdm) {
   struct epoll_event events[64];
   int n = epoll_wait(fdm->epfd, events, sizeof events / sizeof events[0], -1);
   if (n == -1) {
     if (errno == EINTR)
-      return LM_OK;
-    LOG_ERROR("epoll_wait failed: %s", strerror(errno));
-    return LM_ERR_POLL;
+      return;
+    die("epoll_wait: %s", strerror(errno));
   }
 
-  enum lm_err err = LM_OK;
   fdm->dispatching = true;
-  for (int i = 0; i < n && err == LM_OK; i++) {
+  for (int i = 0; i < n; i++) {
     struct fdm_watch* w = events[i].data.ptr;
     if (w->fd != -1)
-      err = w->cb(fdm, w->data);
+      w->cb(fdm, w->data);
   }
   fdm->dispatching = false;
   sweep(fdm);
-  return err;
 }

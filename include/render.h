@@ -1,7 +1,6 @@
 #ifndef LM_RENDER_H
 #define LM_RENDER_H
 
-#include "common.h"
 #include "config.h"
 #include "draw.h"
 #include "frame.h"
@@ -24,7 +23,6 @@ struct render {
   struct state* state;  // sorted before it is drawn
   uint64_t drawn_gen;  // state->gen when it was last drawn
   struct draw_ctx dctx;
-  enum lm_err err;  // sticky; checked by the main loop
 };
 
 /* ui must outlive the render. */
@@ -49,7 +47,7 @@ void render_invalidate(struct render* r);
 /* Presents now if the state changed since it was last drawn (or the
  * render was invalidated, resized or rescaled) and a buffer and the frame
  * slot are free; otherwise a pending frame/release callback presents
- * later. Returns 0, or -1 with r->err set. */
-int render_request(struct render* r);
+ * later. */
+void render_request(struct render* r);
 
 #endif  // !LM_RENDER_H

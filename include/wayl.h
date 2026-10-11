@@ -1,7 +1,6 @@
 #ifndef LM_WAYL_H
 #define LM_WAYL_H
 
-#include "common.h"
 #include "fdm.h"
 #include "kb.h"
 
@@ -42,15 +41,11 @@ void wayl_destroy(struct wayl* w);
 struct wl_shm* wayl_shm(const struct wayl* w);
 struct wl_surface* wayl_surface(const struct wayl* w);
 
-/* A fatal error met while handling events (e.g. a keymap that doesn't
- * compile), or LM_OK. Sticky; checked by the main loop. */
-enum lm_err wayl_error(const struct wayl* w);
-
 /* Main-loop halves around fdm_wait(): wayl_prepare dispatches queued events
  * until it can become a reader, then flushes; wayl_finish cancels the read if
- * the display fd didn't fire. wayl_prepare returns LM_OK, or LM_ERR_DISPLAY
- * on a fatal display error (already logged). */
-enum lm_err wayl_prepare(struct wayl* w);
+ * the display fd didn't fire. A display error, or a keymap that doesn't
+ * compile, is fatal. */
+void wayl_prepare(struct wayl* w);
 void wayl_finish(struct wayl* w);
 
 /* Asks the compositor for an xdg-activation token for whatever the last key

@@ -1,8 +1,6 @@
 #ifndef LM_FRAME_H
 #define LM_FRAME_H
 
-#include "common.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -27,13 +25,13 @@ struct frame {
   void* release_data;
 };
 
-/* Returns LM_OK, or an error code with *f left zeroed. */
-enum lm_err frame_init(struct frame* f,
-                       struct wl_shm* shm,
-                       int w,
-                       int h,
-                       frame_release_fn on_release,
-                       void* data);
+/* Dies if the buffer can't be set up. */
+void frame_init(struct frame* f,
+                struct wl_shm* shm,
+                int w,
+                int h,
+                frame_release_fn on_release,
+                void* data);
 void frame_destroy(struct frame* f);
 
 #endif  // !LM_FRAME_H

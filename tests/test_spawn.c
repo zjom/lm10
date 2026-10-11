@@ -23,7 +23,7 @@ static void test_watch(void) {
   CHECK(pid > 0);
   CHECK(procs_watch(&ps, pid, false));
   while (ps.list.len > 0)
-    CHECK(fdm_wait(&fdm) == LM_OK);
+    fdm_wait(&fdm);
   CHECK(waitpid(pid, NULL, WNOHANG) == -1);  // reaped
 
   procs_destroy(&ps);
@@ -34,7 +34,7 @@ static void test_watch(void) {
 static double wait_gone(struct fdm* fdm, struct procs* ps) {
   double start = now();
   while (ps->list.len > 0 && now() - start < 10)
-    CHECK(fdm_wait(fdm) == LM_OK);
+    fdm_wait(fdm);
   return now() - start;
 }
 

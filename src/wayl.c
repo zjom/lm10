@@ -79,7 +79,6 @@ struct wayl {
   const struct wayl_listener* listener;
   void* data;
 
-  enum lm_err err;  // sticky; see wayl_error
 };
 
 /* ---- activation tokens ---- */
@@ -256,7 +255,7 @@ static void repeat_stop(struct seat* seat) {
     LOG_WARN("failed to disarm repeat timer: %s", strerror(errno));
 }
 
-static enum lm_err handle_key_repeat_ready(struct fdm* fdm, void* data) {
+static void handle_key_repeat_ready(struct fdm* fdm, void* data) {
   (void)fdm;
   struct seat* seat = data;
   uint64_t expcount = 0;
@@ -265,17 +264,16 @@ static enum lm_err handle_key_repeat_ready(struct fdm* fdm, void* data) {
   if (n != sizeof expcount) {
     if (n == -1 && errno != EAGAIN)
       LOG_WARN("failed to read repeat timer: %s", strerror(errno));
-    return LM_OK;
+    return;
   }
 
   if (seat->repeat.key == 0 || seat->xkb_state == NULL)
-    return LM_OK;
+    return;
 
   /* One repeat however many ticks were missed: replaying them after the
    * loop was busy would fire a burst of keys, possibly past the release
    * that is already queued. */
   seat_emit_key(seat, seat->repeat.key);
-  return LM_OK;
 }
 
 static bool repeat_ensure_fd(struct seat* seat) {
@@ -384,27 +382,19 @@ static void keyboard_handle_keymap(void* data,
   }
 
   char* buf = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
-  if (buf == MAP_FAILED) {
-    seat->wayl->err = LM_ERR_MMAP;
-    close(fd);
-    return;
-  }
+  if (buf == MAP_FAILED)
+    die("keymap mmap: %s", strerror(errno));
   struct xkb_keymap* keymap = xkb_keymap_new_from_string(
       seat->wayl->xkb_ctx, buf, XKB_KEYMAP_FORMAT_TEXT_V1,
       XKB_KEYMAP_COMPILE_NO_FLAGS);
   munmap(buf, size);
   close(fd);
 
-  if (keymap == NULL) {
-    seat->wayl->err = LM_ERR_KEYMAP_COMPILE_FAILED;
-    return;
-  }
+  if (keymap == NULL)
+    die("failed to compile the keymap");
   struct xkb_state* xkb_state = xkb_state_new(keymap);
-  if (xkb_state == NULL) {
-    xkb_keymap_unref(keymap);
-    seat->wayl->err = LM_ERR_FAILED_CREATE_STATE_FROM_KEYMAP;
-    return;
-  }
+  if (xkb_state == NULL)
+    die("failed to create an xkb state for the keymap");
   seat->xkb_keymap = keymap;
   seat->xkb_state = xkb_state;
 }
@@ -590,37 +580,31 @@ static const struct wl_registry_listener registry_listener = {
 
 /* ---- display fd ---- */
 
-/* Logs why the display failed. Returns LM_ERR_DISPLAY. */
-static enum lm_err report_display_error(struct wl_display* display) {
+/* Dies saying why the display failed. */
+_Noreturn static void display_error(struct wl_display* display) {
   int err = wl_display_get_error(display);
 
   if (err == EPROTO) {
     const struct wl_interface* interface = NULL;
     uint32_t id = 0;
     uint32_t code = wl_display_get_protocol_error(display, &interface, &id);
-    LOG_FATAL("protocol error: interface %s, object %u, code %u",
-              interface != NULL ? interface->name : "unknown", id, code);
-  } else {
-    LOG_FATAL("lost the display connection: %s", strerror(err ? err : errno));
+    die("protocol error: interface %s, object %u, code %u",
+        interface != NULL ? interface->name : "unknown", id, code);
   }
-  return LM_ERR_DISPLAY;
+  die("lost the display connection: %s", strerror(err ? err : errno));
 }
 
-static enum lm_err handle_display_events(struct fdm* fdm, void* data) {
+static void handle_display_events(struct fdm* fdm, void* data) {
   (void)fdm;
   struct wayl* w = data;
 
   if (!w->read_prepared)
-    return LM_OK;  // not a reader right now; main loop will prepare again
+    return;  // not a reader right now; main loop will prepare again
 
   w->read_prepared = false;  // consumed: wayl_finish has nothing to cancel
-  if (wl_display_read_events(w->display) == -1)
-    return report_display_error(w->display);
-
-  if (wl_display_dispatch_pending(w->display) == -1)
-    return report_display_error(w->display);
-
-  return LM_OK;
+  if (wl_display_read_events(w->display) == -1 ||
+      wl_display_dispatch_pending(w->display) == -1)
+    display_error(w->display);
 }
 
 /* ---- public ---- */
@@ -664,10 +648,8 @@ struct wayl* wayl_new(struct fdm* fdm,
 
   w->registry = wl_display_get_registry(w->display);
   wl_registry_add_listener(w->registry, &registry_listener, w);
-  if (wl_display_roundtrip(w->display) == -1) {  // receive the globals
-    report_display_error(w->display);
-    return fail(w, "failed to read the compositor's globals");
-  }
+  if (wl_display_roundtrip(w->display) == -1)  // receive the globals
+    display_error(w->display);
 
   if (w->compositor == NULL)
     return fail(w, "the compositor lacks wl_compositor");
@@ -774,24 +756,17 @@ struct wl_surface* wayl_surface(const struct wayl* w) {
   return w->surface;
 }
 
-enum lm_err wayl_error(const struct wayl* w) {
-  return w->err;
-}
-
-enum lm_err wayl_prepare(struct wayl* w) {
+void wayl_prepare(struct wayl* w) {
   /* Drain already-queued events until we can become a reader.
    * A failed prepare_read must NOT be paired with read/cancel. */
   while (wl_display_prepare_read(w->display) != 0) {
     if (wl_display_dispatch_pending(w->display) == -1)
-      return report_display_error(w->display);
+      display_error(w->display);
   }
   w->read_prepared = true;
 
-  if (wl_display_flush(w->display) == -1 && errno != EAGAIN) {
-    wayl_finish(w);
-    return report_display_error(w->display);
-  }
-  return LM_OK;
+  if (wl_display_flush(w->display) == -1 && errno != EAGAIN)
+    display_error(w->display);
 }
 
 void wayl_finish(struct wayl* w) {
