@@ -8,9 +8,18 @@ a picker menu overlay for wayland (wlroots) based compositors.
 lm10 --help
 ```
 
+### configuration
+
+see [examples/lm10.ini](examples/lm10.ini) for default configuration options.
+all configuration options are overridable via cli flags.
+
+### examples
+
+see [examples](./examples/) for more usage examples
+
 ```sh
 # Session menu: lock, log out, suspend and so on.
-exec "${LM10:-lm10}" <<'ENTRIES'
+exec "${LM10:-lm10}" --width 40% <<'ENTRIES'
 -n Lock -X loginctl lock-session
 -n 'Log out' -X sh -c 'loginctl terminate-session "$XDG_SESSION_ID"'
 -n Suspend -X systemctl suspend
@@ -20,8 +29,6 @@ exec "${LM10:-lm10}" <<'ENTRIES'
 -n 'Power off' -X systemctl poweroff
 ENTRIES
 ```
-
-[see examples for more](./examples/)
 
 ## building
 

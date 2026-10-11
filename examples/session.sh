@@ -5,7 +5,7 @@
 #
 # -X runs the picked command detached. Commands aren't run by a shell, so
 # Log out uses sh -c for its variable.
-exec "${LM10:-lm10}" <<'ENTRIES'
+exec "${LM10:-lm10}" --width 40% <<'ENTRIES'
 -n Lock -X loginctl lock-session
 -n 'Log out' -X sh -c 'loginctl terminate-session "$XDG_SESSION_ID"'
 -n Suspend -X systemctl suspend
