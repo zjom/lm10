@@ -76,7 +76,7 @@ output.
 
 ## Examples
 
-- [`examples/apps.sh`](examples/apps.sh) is an app launcher built on the
+- [`examples/apps.fish`](examples/apps.fish) is an app launcher built on the
   installed `.desktop` files.
 - [`examples/session.sh`](examples/session.sh) is a session menu (lock, log
   out, suspend, and so on).
