@@ -25,27 +25,24 @@ void spawn_exec(char* const argv[], const char* token);
 struct proc;
 typedef LIST(struct proc*) ProcList;
 
-/* Children being waited for without blocking: each is reaped when its pidfd
- * fires in the event loop. */
+/* Children that lead process groups of their own (spawn_sh with
+ * new_group), each reaped when its pidfd fires in the event loop. */
 struct procs {
   struct fdm* fdm;
   ProcList list;
 };
 
 void procs_init(struct procs* ps, struct fdm* fdm);
-/* Stops waiting for every child, terminating the owned ones. Must run
+/* Kills and reaps every child still running, with its group. Must run
  * before the fdm is destroyed. */
 void procs_destroy(struct procs* ps);
 
-/* Reaps pid in the event loop once it has exited. An owned child leads its
- * own process group, which lm10 may terminate (procs_terminate,
- * procs_destroy). If the kernel can't watch pids (before 5.3), the child is
- * left until lm10 exits. Returns false on failure. */
-bool procs_watch(struct procs* ps, pid_t pid, bool owned);
+/* Reaps pid in the event loop once it has exited. Dies if it can't be
+ * watched. */
+void procs_watch(struct procs* ps, pid_t pid);
 
-/* Sends SIGTERM to an owned child's process group, and SIGKILL if it is
- * still running two seconds later. Does nothing
- * if pid isn't watched (it has been reaped, or couldn't be watched). */
+/* Sends SIGTERM to pid's process group; procs reaps it once it exits.
+ * Does nothing if pid has already been reaped. */
 void procs_terminate(struct procs* ps, pid_t pid);
 
 #endif  // !LM_SPAWN_H

@@ -19,9 +19,9 @@ static void test_watch(void) {
   struct procs ps;
   procs_init(&ps, &fdm);
 
-  pid_t pid = spawn_sh("exit 3", STDERR_FILENO, false);
+  pid_t pid = spawn_sh("exit 3", STDERR_FILENO, true);
   CHECK(pid > 0);
-  CHECK(procs_watch(&ps, pid, false));
+  procs_watch(&ps, pid);
   while (ps.list.len > 0)
     fdm_wait(&fdm);
   CHECK(waitpid(pid, NULL, WNOHANG) == -1);  // reaped
@@ -30,7 +30,8 @@ static void test_watch(void) {
   fdm_destroy(&fdm);
 }
 
-/* Waits in the loop until pid is gone. Returns the seconds it took. */
+/* Waits in the loop until every child is gone. Returns the seconds it
+ * took. */
 static double wait_gone(struct fdm* fdm, struct procs* ps) {
   double start = now();
   while (ps->list.len > 0 && now() - start < 10)
@@ -46,45 +47,32 @@ static void test_terminate(void) {
 
   /* An ordinary command, and a background child of it, go on SIGTERM. */
   pid_t pid = spawn_sh("sleep 30 & sleep 30", STDERR_FILENO, true);
-  CHECK(procs_watch(&ps, pid, true));
+  procs_watch(&ps, pid);
   usleep(100 * 1000);
-  double start = now();
   procs_terminate(&ps, pid);
-  CHECK(now() - start < 0.1);  // doesn't wait
   CHECK(wait_gone(&fdm, &ps) < 1);
   usleep(100 * 1000);
   CHECK(kill(-pid, 0) == -1);  // the whole group is gone
-
-  /* One that ignores SIGTERM is killed after the grace period. */
-  pid = spawn_sh("trap '' TERM; sleep 30", STDERR_FILENO, true);
-  CHECK(procs_watch(&ps, pid, true));
-  usleep(100 * 1000);
-  procs_terminate(&ps, pid);
-  double took = wait_gone(&fdm, &ps);
-  CHECK(took > 1.5 && took < 3);
 
   procs_destroy(&ps);
   fdm_destroy(&fdm);
 }
 
-static void test_destroy_terminates_owned(void) {
+static void test_destroy_kills_and_reaps(void) {
   struct fdm fdm;
   CHECK(fdm_init(&fdm) == 0);
   struct procs ps;
   procs_init(&ps, &fdm);
-  pid_t owned = spawn_sh("sleep 30", STDERR_FILENO, true);
-  pid_t other = spawn_sh("sleep 30", STDERR_FILENO, false);
-  CHECK(procs_watch(&ps, owned, true));
-  CHECK(procs_watch(&ps, other, false));
+  /* Even one that ignores SIGTERM. */
+  pid_t pid = spawn_sh("trap '' TERM; sleep 30", STDERR_FILENO, true);
+  procs_watch(&ps, pid);
   usleep(100 * 1000);
+  double start = now();
   procs_destroy(&ps);
+  CHECK(now() - start < 1);
   fdm_destroy(&fdm);
-
-  int status;
-  CHECK(waitpid(owned, &status, 0) == owned && WIFSIGNALED(status));
-  CHECK(waitpid(other, &status, WNOHANG) == 0);  // left running
-  kill(other, SIGKILL);
-  waitpid(other, &status, 0);
+  CHECK(waitpid(pid, NULL, WNOHANG) == -1);  // already reaped
+  CHECK(kill(-pid, 0) == -1);
 }
 
 static void test_detached(void) {
@@ -97,7 +85,7 @@ static void test_detached(void) {
 int main(void) {
   RUN(test_watch);
   RUN(test_terminate);
-  RUN(test_destroy_terminates_owned);
+  RUN(test_destroy_kills_and_reaps);
   RUN(test_detached);
   return TEST_RESULT;
 }

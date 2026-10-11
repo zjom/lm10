@@ -1,6 +1,5 @@
 #include "spawn.h"
 
-#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -8,15 +7,11 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include <sys/pidfd.h>
-#include <sys/timerfd.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include "log.h"
 #include "util.h"
-
-/* How long an owned child gets between SIGTERM and SIGKILL. */
-#define TERMINATE_GRACE_S 2
 
 /* Points fd at /dev/null. Returns false on failure. */
 static bool to_devnull(int fd, int flags) {
@@ -98,7 +93,6 @@ bool spawn_detached(char* const argv[], const char* token) {
 
   close(fds[1]);
   int child_errno;
-  static_assert(sizeof child_errno == sizeof errno, "errno size mismatch");
   ssize_t n;
   do {
     n = read(fds[0], &child_errno, sizeof child_errno);
@@ -140,8 +134,6 @@ struct proc {
   struct procs* ps;
   pid_t pid;
   int pidfd;
-  int timerfd;  // armed by procs_terminate; -1 until then
-  bool owned;
 };
 
 static struct proc* find(struct procs* ps, pid_t pid) {
@@ -156,8 +148,6 @@ static struct proc* find(struct procs* ps, pid_t pid) {
 static void drop(struct proc* p) {
   struct procs* ps = p->ps;
   fdm_remove(ps->fdm, p->pidfd);
-  if (p->timerfd != -1)
-    fdm_remove(ps->fdm, p->timerfd);
   for (size_t i = 0; i < ps->list.len; i++) {
     if (ps->list.ptr[i] == p) {
       LIST_SWAP_REMOVE(&ps->list, i);
@@ -167,23 +157,16 @@ static void drop(struct proc* p) {
   free(p);
 }
 
+static void reap(pid_t pid, int options) {
+  while (waitpid(pid, NULL, options) == -1 && errno == EINTR)
+    ;
+}
+
 static void on_pidfd(struct fdm* fdm, void* data) {
   (void)fdm;
   struct proc* p = data;
-  pid_t r;
-  while ((r = waitpid(p->pid, NULL, WNOHANG)) == -1 && errno == EINTR)
-    ;
-  if (r == 0)
-    return;  // not yet
+  reap(p->pid, 0);  // it has exited, so this doesn't block
   drop(p);
-}
-
-static void on_kill_timer(struct fdm* fdm, void* data) {
-  struct proc* p = data;
-  LOG_WARN("process %d ignored SIGTERM; killing it", (int)p->pid);
-  kill(-p->pid, SIGKILL);
-  fdm_remove(fdm, p->timerfd);
-  p->timerfd = -1;
 }
 
 void procs_init(struct procs* ps, struct fdm* fdm) {
@@ -193,56 +176,27 @@ void procs_init(struct procs* ps, struct fdm* fdm) {
 void procs_destroy(struct procs* ps) {
   while (ps->list.len > 0) {
     struct proc* p = ps->list.ptr[ps->list.len - 1];
-    if (p->owned)
-      kill(-p->pid, p->timerfd != -1 ? SIGKILL : SIGTERM);
+    /* Killed rather than terminated, so reaping it can't hang; whatever
+     * lm10 execs next mustn't inherit it. */
+    kill(-p->pid, SIGKILL);
+    reap(p->pid, 0);
     drop(p);
   }
   LIST_FREE(&ps->list);
 }
 
-bool procs_watch(struct procs* ps, pid_t pid, bool owned) {
+void procs_watch(struct procs* ps, pid_t pid) {
   int pidfd = pidfd_open(pid, 0);
-  if (pidfd == -1) {
-    LOG_WARN("can't watch process %d: %s", (int)pid, strerror(errno));
-    return false;
-  }
+  if (pidfd == -1)
+    die("pidfd_open: %s", strerror(errno));
   struct proc* p = xmalloc(sizeof *p);
+  *p = (struct proc){.ps = ps, .pid = pid, .pidfd = pidfd};
+  if (fdm_add(ps->fdm, pidfd, EPOLLIN, on_pidfd, p, FDM_AUTOCLOSE) != 0)
+    die("watching process %d: %s", (int)pid, strerror(errno));
   LIST_PUSH(&ps->list, p);
-  *p = (struct proc){
-      .ps = ps,
-      .pid = pid,
-      .pidfd = pidfd,
-      .timerfd = -1,
-      .owned = owned,
-  };
-  if (fdm_add(ps->fdm, pidfd, EPOLLIN, on_pidfd, p, FDM_AUTOCLOSE) != 0) {
-    close(pidfd);
-    p->pidfd = -1;
-    LIST_POP(&ps->list);
-    free(p);
-    return false;
-  }
-  return true;
 }
 
 void procs_terminate(struct procs* ps, pid_t pid) {
-  struct proc* p = find(ps, pid);
-  if (p == NULL)
-    return;  // already reaped: its pid may belong to someone else now
-  assert(p->owned);
-  kill(-pid, SIGTERM);
-  if (p->timerfd != -1)
-    return;
-
-  int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);
-  struct itimerspec ts = {.it_value = {.tv_sec = TERMINATE_GRACE_S}};
-  if (tfd == -1 || timerfd_settime(tfd, 0, &ts, NULL) == -1 ||
-      fdm_add(ps->fdm, tfd, EPOLLIN, on_kill_timer, p, FDM_AUTOCLOSE) != 0) {
-    LOG_WARN("can't time process %d's exit; killing it", (int)pid);
-    if (tfd != -1)
-      close(tfd);
-    kill(-pid, SIGKILL);
-    return;
-  }
-  p->timerfd = tfd;
+  if (find(ps, pid) != NULL)  // else reaped: the pid may be someone else's
+    kill(-pid, SIGTERM);
 }
