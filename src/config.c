@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,10 +47,11 @@ static void config_unescape(StrBuf* dst, Str s) {
   sb_append(dst, s);
 }
 
-#define RGBA(hex)                                      \
-  ((struct config_color){((hex) >> 24 & 0xff) / 255.0, \
-                         ((hex) >> 16 & 0xff) / 255.0, \
-                         ((hex) >> 8 & 0xff) / 255.0, ((hex) & 0xff) / 255.0})
+static struct config_color rgba(uint32_t hex) {
+  return (struct config_color){(hex >> 24 & 0xff) / 255.0,
+                               (hex >> 16 & 0xff) / 255.0,
+                               (hex >> 8 & 0xff) / 255.0, (hex & 0xff) / 255.0};
+}
 
 static void load_default_ui(struct config_ui* ui) {
   ui->width = 600;
@@ -63,20 +65,20 @@ static void load_default_ui(struct config_ui* ui) {
   ui->fuzzy = false;
   ui->show_counter = true;
   ui->colors = (struct config_colors){
-      .background = RGBA(0x141415f2),
-      .border = RGBA(0x878787ff),
-      .text = RGBA(0xcdcdcdff),
-      .match = RGBA(0xe8b589ff),
-      .selection = RGBA(0x333738ff),
-      .selection_text = RGBA(0xcdcdcdff),
-      .selection_match = RGBA(0xe8b589ff),
-      .prompt = RGBA(0x6e94b2ff),
-      .input = RGBA(0xcdcdcdff),
-      .placeholder = RGBA(0x606079ff),
-      .cursor = RGBA(0xcdcdcdff),
-      .counter = RGBA(0x606079ff),
-      .separator = RGBA(0x252530ff),
-      .header = RGBA(0x878787ff),
+      .background = rgba(0x141415f2),
+      .border = rgba(0x878787ff),
+      .text = rgba(0xcdcdcdff),
+      .match = rgba(0xe8b589ff),
+      .selection = rgba(0x333738ff),
+      .selection_text = rgba(0xcdcdcdff),
+      .selection_match = rgba(0xe8b589ff),
+      .prompt = rgba(0x6e94b2ff),
+      .input = rgba(0xcdcdcdff),
+      .placeholder = rgba(0x606079ff),
+      .cursor = rgba(0xcdcdcdff),
+      .counter = rgba(0x606079ff),
+      .separator = rgba(0x252530ff),
+      .header = rgba(0x878787ff),
   };
   set_str(&ui->font, STR("Sans 13"));
   set_str(&ui->prompt, STR("❯ "));
@@ -105,14 +107,20 @@ struct loc {
   size_t line;
 };
 
-/* line 0 is a command-line flag, which has none */
-#define PARSE_WARN(loc, fmt, ...)                                      \
-  do {                                                                 \
-    if ((loc)->line != 0)                                              \
-      LOG_WARN("%s:%zu: " fmt, (loc)->path, (loc)->line, __VA_ARGS__); \
-    else                                                               \
-      LOG_WARN("%s: " fmt, (loc)->path, __VA_ARGS__);                  \
-  } while (0)
+/* Warns about a bad value, saying where it is: line 0 is a command-line
+ * flag, which has none. */
+__attribute__((format(printf, 2, 3))) static void
+parse_warn(const struct loc* loc, const char* fmt, ...) {
+  char msg[512];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(msg, sizeof msg, fmt, ap);
+  va_end(ap);
+  if (loc->line != 0)
+    LOG_WARN("%s:%zu: %s", loc->path, loc->line, msg);
+  else
+    LOG_WARN("%s: %s", loc->path, msg);
+}
 
 static bool parse_int(Str v, int min, int max, int* out) {
   int64_t n;
@@ -151,7 +159,7 @@ static bool parse_color(Str v, struct config_color* out) {
     return false;
   if (v.len == 6)
     hex = hex << 8 | 0xff;
-  *out = RGBA(hex);
+  *out = rgba(hex);
   return true;
 }
 
@@ -215,7 +223,7 @@ static void set_main(struct config_ui* ui,
       k = &config_main_keys[i];
   }
   if (k == NULL) {
-    PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [main]", STR_ARG(key));
+    parse_warn(loc, "unknown key \"" STR_FMT "\" in [main]", STR_ARG(key));
     return;
   }
 
@@ -229,16 +237,15 @@ static void set_main(struct config_ui* ui,
       break;
     case CONFIG_INT:
       if (!parse_int(val, k->min, 1000, field))
-        PARSE_WARN(loc, "%s must be a number from %d to 1000", k->name, k->min);
+        parse_warn(loc, "%s must be a number from %d to 1000", k->name, k->min);
       break;
     case CONFIG_BOOL:
       if (!parse_bool(val, field))
-        PARSE_WARN(loc, "%s must be yes or no", k->name);
+        parse_warn(loc, "%s must be yes or no", k->name);
       break;
     case CONFIG_WIDTH:
       if (!parse_width(val, &ui->width, &ui->width_percent))
-        PARSE_WARN(loc, "%s",
-                   "width must be pixels (600) or a percentage (40%)");
+        parse_warn(loc, "width must be pixels (600) or a percentage (40%%)");
       break;
     case CONFIG_MATCH:
       if (str_eq_cstr(val, "substring"))
@@ -246,7 +253,7 @@ static void set_main(struct config_ui* ui,
       else if (str_eq_cstr(val, "fuzzy"))
         ui->fuzzy = true;
       else
-        PARSE_WARN(loc, "%s", "match must be substring or fuzzy");
+        parse_warn(loc, "match must be substring or fuzzy");
       break;
   }
 }
@@ -260,10 +267,10 @@ static void set_color(struct config_colors* c,
     if (!str_eq_cstr(key, k->name))
       continue;
     if (!parse_color(val, (struct config_color*)((char*)c + k->off)))
-      PARSE_WARN(loc, "%s must be #rrggbb or #rrggbbaa", k->name);
+      parse_warn(loc, "%s must be #rrggbb or #rrggbbaa", k->name);
     return;
   }
-  PARSE_WARN(loc, "unknown key \"" STR_FMT "\" in [colors]", STR_ARG(key));
+  parse_warn(loc, "unknown key \"" STR_FMT "\" in [colors]", STR_ARG(key));
 }
 
 /* The closing delimiter for an argument opened with c, or 0. */
@@ -292,7 +299,7 @@ static bool parse_actions(Arena* arena,
   if (str_eq_nocase(val, STR("none")))
     return true;
   if (val.len == 0) {
-    PARSE_WARN(loc, "%s", "expected actions, or none");
+    parse_warn(loc, "expected actions, or none");
     return false;
   }
 
@@ -306,21 +313,21 @@ static bool parse_actions(Arena* arena,
 
     struct action a = {.arg = STR("")};
     if (!action_from_name(name, &a.kind)) {
-      PARSE_WARN(loc, "unknown action \"" STR_FMT "\"", STR_ARG(name));
+      parse_warn(loc, "unknown action \"" STR_FMT "\"", STR_ARG(name));
       return false;
     }
     char closer = rest.len > 0 ? arg_closer(rest.ptr[0]) : 0;
     if (closer) {
       size_t end = str_find_char(rest, closer);
       if (end == STR_NPOS) {
-        PARSE_WARN(loc, "missing '%c' after " STR_FMT, closer, STR_ARG(name));
+        parse_warn(loc, "missing '%c' after " STR_FMT, closer, STR_ARG(name));
         return false;
       }
       a.arg = str_arena_dup(arena, str_slice(rest, 1, end));
       rest = str_slice(rest, end + 1, rest.len);
     }
     if (action_takes_arg(a.kind) != (closer != 0)) {
-      PARSE_WARN(loc, STR_FMT " %s", STR_ARG(name),
+      parse_warn(loc, STR_FMT " %s", STR_ARG(name),
                  closer ? "takes no argument" : "needs an argument");
       return false;
     }
@@ -330,7 +337,7 @@ static bool parse_actions(Arena* arena,
     if (rest.len == 0)
       return true;
     if (rest.ptr[0] != '+') {
-      PARSE_WARN(loc, "expected '+' after " STR_FMT, STR_ARG(name));
+      parse_warn(loc, "expected '+' after " STR_FMT, STR_ARG(name));
       return false;
     }
     rest = str_slice(rest, 1, rest.len);
@@ -345,7 +352,7 @@ static void set_key(struct config* cfg,
                     Str val) {
   struct config_bind b = {.actions = LIST_INIT_ARENA(&cfg->arena)};
   if (!kb_parse_keypress(key, &b.key)) {
-    PARSE_WARN(loc, "bad key \"" STR_FMT "\" in [keys]", STR_ARG(key));
+    parse_warn(loc, "bad key \"" STR_FMT "\" in [keys]", STR_ARG(key));
     return;
   }
   if (parse_actions(&cfg->arena, loc, val, &b.actions))
@@ -374,7 +381,7 @@ static void set_raw(struct config* cfg,
                     Str val) {
   switch (section) {
     case SECTION_NONE:
-      PARSE_WARN(loc, "%s", "key outside of a section");
+      parse_warn(loc, "key outside of a section");
       break;
     case SECTION_MAIN:
       set_main(&cfg->ui, loc, key, val);
@@ -414,13 +421,13 @@ static void parse(struct config* cfg, const char* path, Str text) {
     if (line.ptr[0] == '[') {
       Str name;
       if (!str_chop_suffix(&line, STR("]"))) {
-        PARSE_WARN(&loc, "%s", "missing ]");
+        parse_warn(&loc, "missing ]");
         section = SECTION_NONE;
         continue;
       }
       name = str_trim(str_slice(line, 1, line.len));
       if (!parse_section(name, &section)) {
-        PARSE_WARN(&loc, "unknown section [" STR_FMT "]", STR_ARG(name));
+        parse_warn(&loc, "unknown section [" STR_FMT "]", STR_ARG(name));
         section = SECTION_NONE;
       }
       continue;
@@ -428,7 +435,7 @@ static void parse(struct config* cfg, const char* path, Str text) {
 
     Str key, val;
     if (!str_cut(line, STR("="), &key, &val)) {
-      PARSE_WARN(&loc, "%s", "expected key = value");
+      parse_warn(&loc, "expected key = value");
       continue;
     }
     set_value(cfg, &loc, section, key, val);
@@ -449,7 +456,7 @@ void config_set_colors(struct config* cfg, const char* list) {
     bool more = str_cut(rest, STR(","), &item, &rest);
     Str key, val;
     if (!str_cut(item, STR("="), &key, &val))
-      PARSE_WARN(&loc, "expected NAME=#rrggbb[aa], got \"" STR_FMT "\"",
+      parse_warn(&loc, "expected NAME=#rrggbb[aa], got \"" STR_FMT "\"",
                  STR_ARG(item));
     else
       set_value(cfg, &loc, SECTION_COLORS, key, val);
@@ -462,7 +469,7 @@ void config_set_bind(struct config* cfg, const char* arg) {
   struct loc loc = {.path = "--bind"};
   Str key, val;
   if (!str_cut(str_from_cstr(arg), STR("="), &key, &val)) {
-    PARSE_WARN(&loc, "%s", "expected KEY=ACTIONS");
+    parse_warn(&loc, "expected KEY=ACTIONS");
     return;
   }
   set_value(cfg, &loc, SECTION_KEYS, key, val);

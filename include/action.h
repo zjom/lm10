@@ -1,11 +1,12 @@
 #ifndef LM_ACTION_H
 #define LM_ACTION_H
 
-#include "state.h"
 #include "ztd_arr.h"
 #include "ztd_str.h"
 
 #include <stdbool.h>
+
+struct state;
 
 /* What a bound key does: each bind runs a list of these in order. */
 enum action_kind {

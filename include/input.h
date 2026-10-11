@@ -3,10 +3,11 @@
 
 #include "entry_parse.h"
 #include "fdm.h"
-#include "spawn.h"
 #include "state.h"
 
 #include <sys/types.h>
+
+struct procs;
 
 /* Reads entries from an fd, or from a command's output, and pushes them into
  * the state as they arrive; see entry_parser for the formats. */

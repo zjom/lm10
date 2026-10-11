@@ -1,6 +1,7 @@
 #include "action.h"
 
 #include "shell.h"
+#include "state.h"
 
 static const struct {
   const char* name;
