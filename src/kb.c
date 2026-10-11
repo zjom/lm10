@@ -2,11 +2,11 @@
 #include "ztd_arena.h"
 #include "ztd_map.h"
 
-#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
+#include <xkbcommon/xkbcommon-names.h>
 
 /* Hashed bytewise: struct kb_keypress has no padding. */
 typedef MAP(struct kb_keypress, uint32_t) KeybindMap;
@@ -31,6 +31,19 @@ void kb_manager_destroy(struct kb_manager* mgr) {
     return;
   arena_free(&mgr->arena);
   free(mgr);
+}
+
+static bool has_shifted_form(xkb_keysym_t sym) {
+  return sym == XKB_KEY_Tab || sym == XKB_KEY_ISO_Left_Tab ||
+         xkb_keysym_to_upper(sym) != xkb_keysym_to_lower(sym);
+}
+
+struct kb_keypress kb_normalize(uint32_t mods, xkb_keysym_t sym) {
+  if ((mods & KB_MOD_SHIFT) && has_shifted_form(sym)) {
+    mods &= ~(uint32_t)KB_MOD_SHIFT;
+    sym = sym == XKB_KEY_Tab ? XKB_KEY_ISO_Left_Tab : xkb_keysym_to_upper(sym);
+  }
+  return (struct kb_keypress){.mods = mods, .sym = sym};
 }
 
 bool kb_parse_keypress(Str s, struct kb_keypress* out) {
@@ -76,13 +89,7 @@ bool kb_parse_keypress(Str s, struct kb_keypress* out) {
   if (sym == XKB_KEY_NoSymbol)
     return false;
 
-  if (xkb_keysym_to_lower(sym) != sym)
-    mask |= KB_MOD_SHIFT;
-  if (mask & KB_MOD_SHIFT) {
-    sym = sym == XKB_KEY_Tab ? XKB_KEY_ISO_Left_Tab : xkb_keysym_to_upper(sym);
-  }
-
-  *out = (struct kb_keypress){.mods = mask, .sym = sym};
+  *out = kb_normalize(mask, sym);
   return true;
 }
 
@@ -96,25 +103,85 @@ void kb_unload_bind(struct kb_manager* mgr, struct kb_keypress lhs) {
   MAP_REMOVE(&mgr->binds, lhs);
 }
 
-struct kb_result kb_lookup(struct kb_manager* mgr,
-                           uint32_t mods,
-                           xkb_keysym_t sym) {
-  struct kb_keypress key = {.mods = mods, .sym = sym};
-  struct kb_result result = {0};
+static bool lookup(struct kb_manager* mgr,
+                   struct kb_keypress key,
+                   struct kb_result* out) {
   const uint32_t* bind = MAP_GET(&mgr->binds, key);
-  if (bind != NULL) {
-    result.bound = true;
-    result.bind = *bind;
-    return result;
+  if (bind == NULL)
+    return false;
+  out->bound = true;
+  out->bind = *bind;
+  return true;
+}
+
+/* Text that may go into the query: no control characters. */
+static bool is_text(const char* s) {
+  if (s[0] == '\0')
+    return false;
+  for (; *s != '\0'; s++) {
+    unsigned char c = (unsigned char)*s;
+    if (c < 0x20 || c == 0x7f)
+      return false;
+  }
+  return true;
+}
+
+struct kb_result kb_resolve(struct kb_manager* mgr,
+                            struct xkb_state* state,
+                            xkb_keycode_t key) {
+  static const struct {
+    const char* name;
+    uint32_t mod;
+  } mod_names[] = {
+      {XKB_MOD_NAME_CTRL, KB_MOD_CTRL},
+      {XKB_MOD_NAME_SHIFT, KB_MOD_SHIFT},
+      {XKB_MOD_NAME_ALT, KB_MOD_ALT},
+      {XKB_MOD_NAME_LOGO, KB_MOD_SUPER},
+  };
+  struct xkb_keymap* keymap = xkb_state_get_keymap(state);
+  struct kb_result r = {0};
+
+  uint32_t active = 0, unconsumed = 0;
+  for (size_t i = 0; i < sizeof mod_names / sizeof mod_names[0]; i++) {
+    xkb_mod_index_t idx = xkb_keymap_mod_get_index(keymap, mod_names[i].name);
+    if (idx == XKB_MOD_INVALID ||
+        xkb_state_mod_index_is_active(state, idx, XKB_STATE_MODS_EFFECTIVE) <=
+            0)
+      continue;
+    active |= mod_names[i].mod;
+    if (xkb_state_mod_index_is_consumed2(state, key, idx,
+                                         XKB_CONSUMED_MODE_XKB) != 1)
+      unconsumed |= mod_names[i].mod;
   }
 
-  /* Unbound chords don't type anything; Shift alone still does. */
-  if (mods & (KB_MOD_CTRL | KB_MOD_ALT | KB_MOD_SUPER))
-    return result;
+  /* Caps Lock changes the keysym's case, but binds ignore it: undo that,
+   * keeping what Shift does. */
+  xkb_keysym_t sym = xkb_state_key_get_one_sym(state, key);
+  xkb_mod_index_t caps = xkb_keymap_mod_get_index(keymap, XKB_MOD_NAME_CAPS);
+  if (caps != XKB_MOD_INVALID &&
+      xkb_state_mod_index_is_active(state, caps, XKB_STATE_MODS_EFFECTIVE) >
+          0 &&
+      xkb_state_mod_index_is_consumed2(state, key, caps,
+                                       XKB_CONSUMED_MODE_XKB) == 1)
+    sym = active & KB_MOD_SHIFT ? xkb_keysym_to_upper(sym)
+                                : xkb_keysym_to_lower(sym);
 
-  /* ASCII only for now: one printable byte. */
-  if (xkb_keysym_to_utf8(sym, result.utf8, sizeof result.utf8) != 2 ||
-      !isprint((unsigned char)result.utf8[0]))
-    result.utf8[0] = '\0';
-  return result;
+  struct kb_keypress first = kb_normalize(unconsumed, sym);
+  if (sym != XKB_KEY_NoSymbol && lookup(mgr, first, &r))
+    return r;
+
+  const xkb_keysym_t* base;
+  if (xkb_keymap_key_get_syms_by_level(keymap, key, 0, 0, &base) == 1) {
+    struct kb_keypress second = kb_normalize(active, base[0]);
+    if ((second.mods != first.mods || second.sym != first.sym) &&
+        lookup(mgr, second, &r))
+      return r;
+  }
+
+  if (unconsumed & (KB_MOD_CTRL | KB_MOD_ALT | KB_MOD_SUPER))
+    return r;
+  if (xkb_state_key_get_utf8(state, key, r.text, sizeof r.text) <= 0 ||
+      !is_text(r.text))
+    r.text[0] = '\0';
+  return r;
 }

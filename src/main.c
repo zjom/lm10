@@ -402,7 +402,7 @@ static void on_key(void* data, const struct kb_result* key) {
     return;
 
   if (!key->bound) {
-    if (!state_query_insert(&app->state, str_from_cstr(key->utf8)))
+    if (!state_query_insert(&app->state, str_from_cstr(key->text)))
       LOG_WARN("query allocation failed");
   } else {
     const ActionList* actions = &app->config.binds.ptr[key->bind].actions;
