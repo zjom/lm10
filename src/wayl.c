@@ -315,10 +315,10 @@ static void keyboard_handle_key(void* data,
   struct seat* seat = data;
   seat->kbd.serial = serial;
 
-  if (seat->kbd.xkb_state == NULL) {
-    seat->wayl->err = LM_ERR_KEY_EVENT_NO_KEYMAP;
+  /* A keyboard may come without a keymap (or with one we can't use); its
+   * keys can't be resolved, so they are ignored. */
+  if (seat->kbd.xkb_state == NULL)
     return;
-  }
 
   xkb_keycode_t keycode = key + 8; /* evdev -> XKB */
 
@@ -347,7 +347,8 @@ static void keyboard_handle_keymap(void* data,
   seat->kbd.xkb_state = NULL;
 
   if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
-    seat->wayl->err = LM_ERR_UNKNOWN_KEYMAP_FORMAT;
+    LOG_WARN("keyboard has no xkb keymap (format %u); ignoring its keys",
+             format);
     close(fd);
     return;
   }
@@ -412,10 +413,8 @@ static void keyboard_handle_modifiers(void* data,
   (void)serial;
   (void)wl_keyboard;
   struct seat* seat = data;
-  if (seat->kbd.xkb_state == NULL) {
-    seat->wayl->err = LM_ERR_KEY_EVENT_NO_KEYMAP;
-    return;
-  }
+  if (seat->kbd.xkb_state == NULL)
+    return; /* no keymap: see keyboard_handle_key */
   xkb_state_update_mask(seat->kbd.xkb_state, mods_depressed, mods_latched,
                         mods_locked, 0, 0, group);
 }
