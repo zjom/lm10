@@ -2,6 +2,7 @@
   lib,
   stdenv,
   meson,
+  gcc,
   ninja,
   pkg-config,
   wayland-scanner,
@@ -41,6 +42,7 @@ stdenv.mkDerivation (finalAttrs: {
   depsBuildBuild = [ pkg-config ];
   # Tools that run at build time
   nativeBuildInputs = [
+    gcc
     meson
     ninja
     pkg-config
