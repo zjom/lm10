@@ -481,6 +481,13 @@ void state_select_prev(struct state* state) {
   state->gen++;
 }
 
+void state_select(struct state* state, size_t i) {
+  if (i == state->selected)
+    return;
+  state->selected = i;
+  state->gen++;
+}
+
 const struct state_entry* state_match(const struct state* state, size_t i) {
   return &state->entries.ptr[state->matches.ptr[i].entry];
 }

@@ -220,6 +220,16 @@ static bool run_action(struct app* app, const struct action* a) {
     case ACTION_CHANGE_QUERY:
       state_query_set(st, a->arg);
       break;
+    case ACTION_SELECT_ROW: {
+      size_t row, match;
+      /* Rows are in ranked order, as they are drawn. */
+      state_sort(st);
+      if (!action_parse_row(a->arg, &row) ||
+          !draw_row_match(&app->render.dctx, st, row, &match))
+        return true;
+      state_select(st, match);
+      break;
+    }
     case ACTION_RELOAD:
     case ACTION_EXECUTE: {
       StrBuf cmd = STRBUF_INIT;

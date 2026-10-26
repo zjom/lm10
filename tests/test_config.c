@@ -114,6 +114,8 @@ static void test_bad_actions(void) {
       "Escape=cancel(x)",      // takes no argument
       "Escape=reload",         // needs an argument
       "Escape=reload(ls",      // unterminated
+      "Escape=select-row(0)",  // rows are from 1
+      "Escape=select-row(x)",  // not a number
       "Escape=cancel cancel",  // missing +
       "Escape=cancel+",        // trailing +
       "NotAKey=cancel",        // bad key

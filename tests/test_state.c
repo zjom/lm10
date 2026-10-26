@@ -126,6 +126,7 @@ static void test_gen(void) {
   CHANGED(state_cursor_move(&st, STATE_MOTION_START));
   CHANGED(state_select_next(&st));
   CHANGED(state_select_prev(&st));
+  CHANGED(state_select(&st, 1));
   CHANGED(state_set_prompt(&st, STR("> ")));
   CHANGED(state_set_header(&st, STR("a\nb")));
   CHANGED(state_query_set(&st, STR("t")));

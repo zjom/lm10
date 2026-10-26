@@ -331,6 +331,11 @@ static bool parse_actions(Arena* arena,
                  closer ? "takes no argument" : "needs an argument");
       return false;
     }
+    size_t row;
+    if (a.kind == ACTION_SELECT_ROW && !action_parse_row(a.arg, &row)) {
+      parse_warn(loc, STR_FMT " needs a row number from 1", STR_ARG(name));
+      return false;
+    }
     LIST_PUSH(out, a);
 
     rest = str_trim_left(rest);

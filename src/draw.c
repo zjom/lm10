@@ -12,7 +12,8 @@
 #define SCROLLBAR_W 3
 
 int draw_ctx_init(struct draw_ctx* dc, const struct config_ui* ui) {
-  *dc = (struct draw_ctx){.ui = ui, .spans = LIST_INIT};
+  *dc = (struct draw_ctx){
+      .ui = ui, .visible = (size_t)ui->lines, .spans = LIST_INIT};
   dc->font = pango_font_description_from_string(sb_cstr(&ui->font));
   if (dc->font == NULL)
     return -1;
@@ -245,17 +246,31 @@ static void draw_query(const struct state* state,
   cairo_restore(cr);
 }
 
-/* Moves dc->first so the selection is one of the visible rows. */
-static void scroll_to_selection(const struct state* state,
-                                struct draw_ctx* dc,
-                                size_t visible) {
+/* Where first must move so the selection is one of the visible rows. */
+static size_t scroll_to_selection(const struct state* state,
+                                  size_t first,
+                                  size_t visible) {
   size_t n = state->matches.len;
-  if (state->selected < dc->first)
-    dc->first = state->selected;
-  else if (state->selected >= dc->first + visible)
-    dc->first = state->selected + 1 - visible;
-  if (dc->first + visible > n)
-    dc->first = n > visible ? n - visible : 0;
+  if (state->selected < first)
+    first = state->selected;
+  else if (state->selected >= first + visible)
+    first = state->selected + 1 - visible;
+  if (first + visible > n)
+    first = n > visible ? n - visible : 0;
+  return first;
+}
+
+bool draw_row_match(const struct draw_ctx* dc,
+                    const struct state* state,
+                    size_t row,
+                    size_t* match) {
+  if (row >= dc->visible)
+    return false;
+  size_t i = scroll_to_selection(state, dc->first, dc->visible) + row;
+  if (i >= state->matches.len)
+    return false;
+  *match = i;
+  return true;
 }
 
 static void draw_rows(const struct state* state,
@@ -271,6 +286,7 @@ static void draw_rows(const struct state* state,
   double list_h = h - g->inset - g->list_y;
   size_t n = state->matches.len;
   size_t visible = list_h > 0 ? (size_t)(list_h / g->row_h) : 0;
+  dc->visible = visible;
   if (visible == 0)
     return;
 
@@ -283,7 +299,7 @@ static void draw_rows(const struct state* state,
     }
     return;
   }
-  scroll_to_selection(state, dc, visible);
+  dc->first = scroll_to_selection(state, dc->first, visible);
 
   /* Leave room for a scrollbar in the right padding when it's needed. */
   bool scrollbar = n > visible && ui->padding >= SCROLLBAR_W + 2;

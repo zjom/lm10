@@ -34,8 +34,9 @@ enum action_kind {
   /* These take an argument. */
   ACTION_CHANGE_PROMPT,
   ACTION_CHANGE_QUERY,
-  ACTION_RELOAD,   // sh -c arg; its output replaces the entries
-  ACTION_EXECUTE,  // sh -c arg; the bind's later actions wait for it
+  ACTION_SELECT_ROW,  // arg is N: select the N-th visible row, from 1
+  ACTION_RELOAD,      // sh -c arg; its output replaces the entries
+  ACTION_EXECUTE,     // sh -c arg; the bind's later actions wait for it
 };
 #define ACTION_COUNT (ACTION_EXECUTE + 1)
 
@@ -52,6 +53,10 @@ bool action_from_name(Str name, enum action_kind* kind);
 const char* action_name(enum action_kind kind);
 /* Whether the action takes an argument, e.g. reload(CMD). */
 bool action_takes_arg(enum action_kind kind);
+
+/* select-row's argument: a row number from 1, returned as an index from 0.
+ * Returns false if arg isn't one. */
+bool action_parse_row(Str arg, size_t* row);
 
 /* Expands the placeholders in tmpl into out, each shell-quoted:
  *

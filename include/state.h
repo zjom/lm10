@@ -111,6 +111,8 @@ void state_sort(struct state* state);
 /* These sort first, so the selection moves through the ranked matches. */
 void state_select_next(struct state* state);
 void state_select_prev(struct state* state);
+/* Selects the i-th match. i must be < state->matches.len. */
+void state_select(struct state* state, size_t i);
 /* The i-th match. i must be < state->matches.len. */
 const struct state_entry* state_match(const struct state* state, size_t i);
 /* Sets spans to the byte ranges of the i-th match's name that matched the

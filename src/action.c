@@ -26,6 +26,7 @@ static const struct {
     [ACTION_MATCH_PREV] = {"match-prev", false},
     [ACTION_CHANGE_PROMPT] = {"change-prompt", true},
     [ACTION_CHANGE_QUERY] = {"change-query", true},
+    [ACTION_SELECT_ROW] = {"select-row", true},
     [ACTION_RELOAD] = {"reload", true},
     [ACTION_EXECUTE] = {"execute", true},
 };
@@ -62,6 +63,14 @@ static bool parse_index(Str s, size_t* out) {
   if (!str_to_u64(s, 10, &n))
     return false;
   *out = (size_t)n;
+  return true;
+}
+
+bool action_parse_row(Str arg, size_t* row) {
+  size_t n = 0;
+  if (arg.len == 0 || !parse_index(arg, &n) || n == 0)
+    return false;
+  *row = n - 1;
   return true;
 }
 

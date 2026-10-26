@@ -69,8 +69,19 @@ static void test_expand(void) {
   state_destroy(&st);
 }
 
+static void test_parse_row(void) {
+  size_t row = 42;
+  CHECK(action_parse_row(STR("1"), &row) && row == 0);
+  CHECK(action_parse_row(STR("10"), &row) && row == 9);
+  CHECK(!action_parse_row(STR("0"), &row));
+  CHECK(!action_parse_row(STR(""), &row));
+  CHECK(!action_parse_row(STR("-1"), &row));
+  CHECK(!action_parse_row(STR(" 1"), &row));
+}
+
 int main(void) {
   RUN(test_quote);
   RUN(test_expand);
+  RUN(test_parse_row);
   return TEST_RESULT;
 }
