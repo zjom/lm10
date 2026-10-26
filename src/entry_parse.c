@@ -97,6 +97,18 @@ static bool parse_line(struct entry_parser* ep, char* line, size_t len) {
   return true;
 }
 
+/* Pushes one raw line as an entry. Returns true if it was pushed. */
+static bool push_raw_line(struct entry_parser* ep, char* line, size_t len) {
+  if (memchr(line, '\0', len) != NULL) {
+    LOG_WARN("%s: NUL byte in line, skipping", ep->name);
+    return false;
+  }
+  LIST_CLEAR(&ep->words);
+  LIST_PUSH(&ep->words, str_from_parts(line, len));
+  state_push(ep->state, STR(""), &ep->words, STATE_RUN_PRINT_LINE);
+  return true;
+}
+
 /* Parses every complete line in the buffer, plus the trailing partial one if
  * at_eof. Returns true if any entry was pushed. */
 static bool drain_lines(struct entry_parser* ep, bool at_eof) {
@@ -113,7 +125,9 @@ static bool drain_lines(struct entry_parser* ep, bool at_eof) {
         break;
       nl = buf + len;
     }
-    pushed |= parse_line(ep, buf + pos, (size_t)(nl - (buf + pos)));
+    size_t n = (size_t)(nl - (buf + pos));
+    pushed |= ep->raw ? push_raw_line(ep, buf + pos, n)
+                      : parse_line(ep, buf + pos, n);
     pos = from = (size_t)(nl - buf) + (nl < buf + len);
   }
 
@@ -127,9 +141,11 @@ static bool drain_lines(struct entry_parser* ep, bool at_eof) {
 
 void entry_parser_init(struct entry_parser* ep,
                        const char* name,
+                       bool raw,
                        struct state* state) {
   *ep = (struct entry_parser){
       .name = name,
+      .raw = raw,
       .state = state,
       .buf = STRBUF_INIT,
       .words = LIST_INIT,

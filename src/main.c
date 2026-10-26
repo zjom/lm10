@@ -20,6 +20,7 @@
 
 #include "action.h"
 #include "config.h"
+#include "dmenu.h"
 #include "fdm.h"
 #include "input.h"
 #include "log.h"
@@ -39,6 +40,7 @@ struct app {
   struct state state;
   struct render render;
   bool running;
+  bool dmenu;  // see dmenu.h
   /* The picked entry, run once the event loop has stopped: nothing may
    * change the state after it is set, so input stops and keys are ignored.
    * Without one, lm10 was cancelled. */
@@ -60,15 +62,18 @@ static char** entry_argv(const struct state_entry* entry) {
   return argv;
 }
 
-/* Prints the entry's argv to stdout as one shell-quoted line. Returns false
- * if writing failed. */
-static bool print_entry(const struct state_entry* entry) {
+/* Prints the entry's argv to stdout as one line, its words shell-quoted if
+ * quote. Returns false if writing failed. */
+static bool print_entry(const struct state_entry* entry, bool quote) {
   StrBuf line = STRBUF_INIT;
   size_t i = 0;
   ARR_FOREACH(const Str, s, &entry->argv) {
     if (i++ > 0)
       sb_append_char(&line, ' ');
-    shell_quote(&line, *s);
+    if (quote)
+      shell_quote(&line, *s);
+    else
+      sb_append(&line, *s);
   }
   sb_append_char(&line, '\n');
   bool ok = true;
@@ -88,12 +93,27 @@ static void pick(struct app* app, const struct state_entry* entry) {
   app->running = false;
 }
 
+/* Picks the query itself, as an entry printed as is. */
+static void pick_query(struct app* app) {
+  struct state* st = &app->state;
+  StrList argv = LIST_INIT;
+  LIST_PUSH(&argv, sb_str(&st->query));
+  state_push(st, STR(""), &argv, STATE_RUN_PRINT_LINE);
+  LIST_FREE(&argv);
+  pick(app, &st->entries.ptr[st->entries.len - 1]);
+}
+
+/* Whether picking the entry starts something, which may take focus. */
+static bool entry_starts(const struct state_entry* entry) {
+  return entry->run == STATE_RUN_EXEC || entry->run == STATE_RUN_DETACH;
+}
+
 /* Runs the picked entry once everything else has been torn down, handing it
  * the activation token if there is one. Returns false on failure; doesn't
  * return if the entry execs in place of lm10. */
 static bool run_entry(const struct state_entry* entry, const char* token) {
-  if (entry->run == STATE_RUN_PRINT)
-    return print_entry(entry);
+  if (!entry_starts(entry))
+    return print_entry(entry, entry->run == STATE_RUN_PRINT);
 
   char** argv = entry_argv(entry);
   bool ok = false;
@@ -141,7 +161,7 @@ static bool reload(struct app* app, const char* cmd) {
   input_destroy(&app->input);
   state_clear_entries(&app->state);
   return input_init_command(&app->input, &app->fdm, &app->procs, cmd,
-                            &app->state, on_entries, app) == 0;
+                            app->dmenu, &app->state, on_entries, app) == 0;
 }
 
 /* Runs sh -c cmd and waits for it, with its stdout on stderr so it can't
@@ -203,11 +223,17 @@ static bool run_action(struct app* app, const struct action* a) {
       break;
     case ACTION_MATCH_EXEC: {
       const struct state_entry* entry = state_get_selection(st);
-      if (entry == NULL)
+      if (entry != NULL)
+        pick(app, entry);
+      else if (app->dmenu)
+        pick_query(app);  // as dmenu does
+      else
         return false;
-      pick(app, entry);
       return true;
     }
+    case ACTION_QUERY_EXEC:
+      pick_query(app);
+      return true;
     case ACTION_MATCH_NEXT:
       state_select_next(st);
       break;
@@ -272,7 +298,14 @@ void app_key(struct app* app, const struct kb_result* key) {
 
 /* getopt_long values past the chars: --KEY is OPT_MAIN + its index in
  * config_main_keys */
-enum { OPT_PRINT_CONFIG = 0x100, OPT_COLOR, OPT_BIND, OPT_MAIN };
+enum {
+  OPT_PRINT_CONFIG = 0x100,
+  OPT_VERSION,
+  OPT_DMENU,
+  OPT_COLOR,
+  OPT_BIND,
+  OPT_MAIN
+};
 
 /* A config flag as given, applied after the file. */
 struct flag {
@@ -285,6 +318,7 @@ static void usage(FILE* f, const char* argv0) {
           "usage: %s [-v] [-c CONFIG] [--KEY VALUE]... [--color "
           "NAME=VALUE,...]...\n"
           "       [--bind KEY=ACTIONS]...\n"
+          "       %s --dmenu [DMENU-FLAG]... [lm10 flags]\n"
           "       %s --print-config\n"
           "\n"
           "Reads entries from stdin, one per line:\n"
@@ -294,14 +328,21 @@ static void usage(FILE* f, const char* argv0) {
           "its command line to stdout.\n"
           "Exits 0 once something was picked, 130 if nothing was, 1 on error.\n"
           "\n"
+          "With --dmenu, or run as dmenu, each line is an entry as is, and\n"
+          "picking one prints it; Return with no match prints the query.\n"
+          "Cancelling exits 1. dmenu's -p -l -fn -nb -nf -sb -sf -b -m -v\n"
+          "are understood; -i -f and -w are ignored.\n"
+          "\n"
           "  -c, --config PATH  config file (default: "
           "$XDG_CONFIG_HOME/lm10/lm10.ini)\n"
           "  -v, --verbose      log more; twice for even more\n"
           "  -h, --help         show this help\n"
+          "  --version          show the version\n"
+          "  --dmenu            read and print plain lines, as dmenu does\n"
           "  --print-config     print the default lm10.ini, with comments\n"
           "\n"
           "These override the config file, in order (see lm10.ini):\n",
-          argv0, argv0);
+          argv0, argv0, argv0);
   for (size_t i = 0; i < config_n_main_keys; i++)
     fprintf(f, "  --%s %s\n", config_main_keys[i].name,
             config_main_keys[i].arg);
@@ -313,6 +354,7 @@ static void usage(FILE* f, const char* argv0) {
       "\n"
       "A key runs actions joined by '+', some taking an argument:\n"
       "  --bind 'Control+r=change-prompt(> )+reload(ls ~)'\n"
+      "query-exec picks the query itself, printed as is.\n"
       "change-prompt(T), change-query(T), reload(CMD) and execute(CMD)\n"
       "join the built-in ones (see lm10.ini). In CMD, {} {n} {q} {N}\n"
       "{N..M} become the selection's command, name, the query and argv\n"
@@ -366,6 +408,15 @@ int main(int argc, char** argv) {
   char* token = NULL;  // activation token for the picked entry
   bool render_ok = false, input_ok = false;
   const char* config_path = NULL;
+
+  /* dmenu's flags are rewritten into lm10's first. */
+  bool dmenu = dmenu_wanted(argc, argv);
+  char** dmenu_argv = NULL;
+  if (dmenu) {
+    dmenu_argv = dmenu_translate(argc, argv, &argc);
+    argv = dmenu_argv;
+  }
+
   /* config flags, in order; there are fewer than argc of them */
   struct flag* flags = xcalloc((size_t)argc, sizeof(*flags));
   size_t n_flags = 0;
@@ -375,6 +426,8 @@ int main(int argc, char** argv) {
       {"verbose", no_argument, NULL, 'v'},
       {"help", no_argument, NULL, 'h'},
       {"print-config", no_argument, NULL, OPT_PRINT_CONFIG},
+      {"version", no_argument, NULL, OPT_VERSION},
+      {"dmenu", no_argument, NULL, OPT_DMENU},
       {"color", required_argument, NULL, OPT_COLOR},
       {"bind", required_argument, NULL, OPT_BIND},
   };
@@ -397,7 +450,16 @@ int main(int argc, char** argv) {
         usage(stdout, argv[0]);
         free(opts);
         free(flags);
+        free(dmenu_argv);
         return EXIT_SUCCESS;
+      case OPT_VERSION:
+        printf("lm10 %s\n", LM_VERSION);
+        free(opts);
+        free(flags);
+        free(dmenu_argv);
+        return EXIT_SUCCESS;
+      case OPT_DMENU:
+        break;  // dmenu_wanted saw it
       case OPT_PRINT_CONFIG: {
         size_t n = fwrite(config_example, 1, config_example_len, stdout);
         bool ok = n == config_example_len && fflush(stdout) == 0;
@@ -405,12 +467,14 @@ int main(int argc, char** argv) {
           LOG_ERROR("failed to write to stdout: %s", strerror(errno));
         free(opts);
         free(flags);
+        free(dmenu_argv);
         return ok ? EXIT_SUCCESS : EXIT_ERROR;
       }
       case '?':
         usage(stderr, argv[0]);
         free(opts);
         free(flags);
+        free(dmenu_argv);
         return EXIT_ERROR;
       default:
         flags[n_flags++] = (struct flag){opt, optarg};
@@ -421,11 +485,12 @@ int main(int argc, char** argv) {
   if (optind < argc) {
     usage(stderr, argv[0]);
     free(flags);
+    free(dmenu_argv);
     return EXIT_ERROR;
   }
   set_log_level(verbose);
 
-  struct app app = {.running = true};
+  struct app app = {.running = true, .dmenu = dmenu};
   config_init(&app.config);
   state_init(&app.state);
 
@@ -434,7 +499,8 @@ int main(int argc, char** argv) {
   procs_init(&app.procs, &app.fdm);
 
   bool config_ok = load_config(&app.config, config_path, flags, n_flags);
-  free(flags);  // the flags were copied into the config
+  free(flags);       // the flags were copied into the config
+  free(dmenu_argv);  // so were their values
   if (!config_ok) {
     err = 1;
     goto cleanup;
@@ -444,7 +510,13 @@ int main(int argc, char** argv) {
   state_set_header(&app.state, sb_str(&ui->header));
   state_set_fuzzy(&app.state, ui->fuzzy);
 
-  app.wayl = wayl_new(&app.fdm, &app, "lm10");
+  static const enum wayl_position positions[] = {
+      [CONFIG_POSITION_CENTER] = WAYL_POSITION_CENTER,
+      [CONFIG_POSITION_TOP] = WAYL_POSITION_TOP,
+      [CONFIG_POSITION_BOTTOM] = WAYL_POSITION_BOTTOM,
+  };
+  app.wayl = wayl_new(&app.fdm, &app, "lm10", positions[ui->position],
+                      sb_cstr(&ui->output));
   if (app.wayl == NULL) {
     err = 1;
     goto cleanup;
@@ -459,8 +531,8 @@ int main(int argc, char** argv) {
   render_ok = true;
 
   /* after render: new entries request a redraw */
-  if (input_init(&app.input, &app.fdm, STDIN_FILENO, &app.state, on_entries,
-                 &app) != 0) {
+  if (input_init(&app.input, &app.fdm, STDIN_FILENO, app.dmenu, &app.state,
+                 on_entries, &app) != 0) {
     err = 1;
     goto cleanup;
   }
@@ -480,7 +552,7 @@ int main(int argc, char** argv) {
 
   /* Not from inside the loop: getting the token takes a roundtrip, which
    * must not run while the loop has a read prepared on the display. */
-  if (app.pending != NULL && app.pending->run != STATE_RUN_PRINT)
+  if (app.pending != NULL && entry_starts(app.pending))
     token = wayl_activation_token(app.wayl);
 
 cleanup:
@@ -498,5 +570,7 @@ cleanup:
   config_destroy(&app.config);
   if (err != 0)
     return EXIT_ERROR;
-  return app.pending != NULL ? EXIT_PICKED : EXIT_CANCELLED;
+  if (app.pending == NULL)
+    return app.dmenu ? EXIT_ERROR : EXIT_CANCELLED;  // dmenu exits 1
+  return EXIT_PICKED;
 }

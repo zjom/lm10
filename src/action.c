@@ -24,6 +24,7 @@ static const struct {
     [ACTION_MATCH_EXEC] = {"match-exec", false},
     [ACTION_MATCH_NEXT] = {"match-next", false},
     [ACTION_MATCH_PREV] = {"match-prev", false},
+    [ACTION_QUERY_EXEC] = {"query-exec", false},
     [ACTION_CHANGE_PROMPT] = {"change-prompt", true},
     [ACTION_CHANGE_QUERY] = {"change-query", true},
     [ACTION_SELECT_ROW] = {"select-row", true},

@@ -21,11 +21,14 @@ struct input {
   void* data;
 };
 
+/* raw reads dmenu lines (see entry_parser). */
+
 /* Starts watching fd. If fd can't be polled (e.g. a regular file), it is read
  * to EOF right away instead. Returns 0, or -1 on failure. */
 int input_init(struct input* in,
                struct fdm* fdm,
                int fd,
+               bool raw,
                struct state* state,
                void (*on_change)(void* data),
                void* data);
@@ -35,6 +38,7 @@ int input_init_command(struct input* in,
                        struct fdm* fdm,
                        struct procs* procs,
                        const char* cmd,
+                       bool raw,
                        struct state* state,
                        void (*on_change)(void* data),
                        void* data);

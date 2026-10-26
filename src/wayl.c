@@ -38,6 +38,12 @@ struct seat {
   struct repeat repeat;
 };
 
+struct output {
+  uint32_t wl_name;  // registry name, to notice the output going away
+  struct wl_output* wl_output;
+  char* name;  // e.g. "DP-1", from wl_output v4; NULL until it arrives
+};
+
 /* ---- activation tokens ---- */
 
 static void token_done(void* data,
@@ -148,7 +154,8 @@ static void layer_surface_configure(void* data,
 
   if (!wayl->sized) {
     /* Anchored to all edges, so w x h is the output's logical size. Let the
-     * app pick its size; with no anchors the compositor centers us. Commit
+     * app pick its size; with no anchors the compositor centers us, and with
+     * only the top or bottom one it centers us along that edge. Commit
      * without a buffer and wait for the configure that carries our size. */
     if (w > 0 && h > 0) {
       int sw = wayl->width, sh = wayl->height;
@@ -157,7 +164,12 @@ static void layer_surface_configure(void* data,
       wayl->height = sh;
     }
     wayl->sized = true;
-    zwlr_layer_surface_v1_set_anchor(surface, 0);
+    uint32_t anchor = 0;
+    if (wayl->position == WAYL_POSITION_TOP)
+      anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP;
+    else if (wayl->position == WAYL_POSITION_BOTTOM)
+      anchor = ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM;
+    zwlr_layer_surface_v1_set_anchor(surface, anchor);
     zwlr_layer_surface_v1_set_size(surface, wayl->width, wayl->height);
     zwlr_layer_surface_v1_ack_configure(surface, serial);
     wl_surface_commit(wayl->surface);
@@ -481,6 +493,101 @@ static void seat_add(struct wayl* w,
   wl_seat_add_listener(s->wl_seat, &seat_listener, s);
 }
 
+/* ---- outputs ---- */
+
+static void output_geometry(void* data,
+                            struct wl_output* o,
+                            int32_t x,
+                            int32_t y,
+                            int32_t phys_w,
+                            int32_t phys_h,
+                            int32_t subpixel,
+                            const char* make,
+                            const char* model,
+                            int32_t transform) {
+  (void)data, (void)o, (void)x, (void)y, (void)phys_w, (void)phys_h;
+  (void)subpixel, (void)make, (void)model, (void)transform;
+}
+
+static void output_mode(void* data,
+                        struct wl_output* o,
+                        uint32_t flags,
+                        int32_t w,
+                        int32_t h,
+                        int32_t refresh) {
+  (void)data, (void)o, (void)flags, (void)w, (void)h, (void)refresh;
+}
+
+static void output_done(void* data, struct wl_output* o) {
+  (void)data, (void)o;
+}
+
+static void output_scale(void* data, struct wl_output* o, int32_t factor) {
+  (void)data, (void)o, (void)factor;
+}
+
+static void output_name(void* data, struct wl_output* o, const char* name) {
+  (void)o;
+  struct output* out = data;
+  free(out->name);
+  out->name = strdup(name);
+}
+
+static void output_description(void* data,
+                               struct wl_output* o,
+                               const char* description) {
+  (void)data, (void)o, (void)description;
+}
+
+static const struct wl_output_listener output_listener = {
+    .geometry = output_geometry,
+    .mode = output_mode,
+    .done = output_done,
+    .scale = output_scale,
+    .name = output_name,
+    .description = output_description,
+};
+
+static void output_add(struct wayl* w,
+                       struct wl_registry* reg,
+                       uint32_t name,
+                       uint32_t version) {
+  struct output* out = xmalloc(sizeof *out);
+  *out = (struct output){.wl_name = name};
+  /* v4 for the name */
+  out->wl_output =
+      wl_registry_bind(reg, name, &wl_output_interface, MIN(version, 4));
+  wl_output_add_listener(out->wl_output, &output_listener, out);
+  LIST_PUSH(&w->outputs, out);
+}
+
+static void output_destroy(struct output* out) {
+  if (wl_output_get_version(out->wl_output) >= WL_OUTPUT_RELEASE_SINCE_VERSION)
+    wl_output_release(out->wl_output);
+  else
+    wl_output_destroy(out->wl_output);
+  free(out->name);
+  free(out);
+}
+
+/* The output called want, or the one at that index if want is a number;
+ * NULL if there is none. */
+static struct wl_output* find_output(const struct wayl* w, const char* want) {
+  char* end;
+  errno = 0;
+  unsigned long i = strtoul(want, &end, 10);
+  bool is_index = want[0] >= '0' && want[0] <= '9' && *end == '\0' &&
+                  errno == 0;
+  for (size_t k = 0; k < w->outputs.len; k++) {
+    const struct output* out = w->outputs.ptr[k];
+    if (out->name != NULL && strcmp(out->name, want) == 0)
+      return out->wl_output;
+  }
+  if (is_index && i < w->outputs.len)
+    return w->outputs.ptr[i]->wl_output;
+  return NULL;
+}
+
 /* ---- registry ---- */
 
 static void registry_global(void* data,
@@ -497,6 +604,8 @@ static void registry_global(void* data,
     w->shm = wl_registry_bind(reg, name, &wl_shm_interface, 1);
   } else if (strcmp(iface, wl_seat_interface.name) == 0) {
     seat_add(w, reg, name, version);
+  } else if (strcmp(iface, wl_output_interface.name) == 0) {
+    output_add(w, reg, name, version);
   } else if (strcmp(iface, xdg_activation_v1_interface.name) == 0) {
     w->xdg_activation_v1 =
         wl_registry_bind(reg, name, &xdg_activation_v1_interface, 1);
@@ -519,12 +628,21 @@ static void registry_global_remove(void* data,
                                    uint32_t name) {
   (void)reg;
   struct wayl* w = data;
-  /* Only seats come and go; the other globals we use are for good. */
+  /* Only seats and outputs come and go; the other globals we use are for
+   * good. Outputs keep their order, as they are picked by index. */
   for (size_t i = 0; i < w->seats.len; i++) {
     struct seat* s = w->seats.ptr[i];
     if (s->wl_name == name) {
       LIST_SWAP_REMOVE(&w->seats, i);
       seat_destroy(s);
+      return;
+    }
+  }
+  for (size_t i = 0; i < w->outputs.len; i++) {
+    struct output* out = w->outputs.ptr[i];
+    if (out->wl_name == name) {
+      LIST_REMOVE(&w->outputs, i);
+      output_destroy(out);
       return;
     }
   }
@@ -573,10 +691,16 @@ static struct wayl* fail(struct wayl* w, const char* why) {
   return NULL;
 }
 
-struct wayl* wayl_new(struct fdm* fdm, struct app* app, const char* namespace) {
+struct wayl* wayl_new(struct fdm* fdm,
+                      struct app* app,
+                      const char* namespace,
+                      enum wayl_position position,
+                      const char* output) {
   struct wayl* w = xmalloc(sizeof *w);
   *w = (struct wayl){
       .seats = LIST_INIT,
+      .outputs = LIST_INIT,
+      .position = position,
       .fdm = fdm,
       .display_fd = -1,
       .width = 640,
@@ -625,8 +749,17 @@ struct wayl* wayl_new(struct fdm* fdm, struct app* app, const char* namespace) {
                                         &fractional_scale_listener, w);
   }
 
+  struct wl_output* wl_output = NULL;
+  if (output[0] != '\0') {
+    if (wl_display_roundtrip(w->display) == -1)  // receive the output names
+      display_error(w->display);
+    wl_output = find_output(w, output);
+    if (wl_output == NULL)
+      LOG_WARN("no output \"%s\"; letting the compositor pick", output);
+  }
+
   w->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-      w->layer_shell, w->surface, NULL, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+      w->layer_shell, w->surface, wl_output, ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
       namespace);
   if (w->layer_surface == NULL)
     return fail(w, "failed to create a layer surface");
@@ -666,6 +799,11 @@ void wayl_destroy(struct wayl* w) {
     seat_destroy(s);
   }
   LIST_FREE(&w->seats);
+  while (w->outputs.len > 0) {
+    output_destroy(w->outputs.ptr[w->outputs.len - 1]);
+    LIST_POP(&w->outputs);
+  }
+  LIST_FREE(&w->outputs);
   xkb_context_unref(w->xkb_ctx);
 
   if (w->display_fd >= 0)

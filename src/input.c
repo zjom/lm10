@@ -57,6 +57,7 @@ static void on_readable(struct fdm* fdm, void* data) {
 int input_init(struct input* in,
                struct fdm* fdm,
                int fd,
+               bool raw,
                struct state* state,
                void (*on_change)(void* data),
                void* data) {
@@ -67,7 +68,7 @@ int input_init(struct input* in,
       .on_change = on_change,
       .data = data,
   };
-  entry_parser_init(&in->parser, "stdin", state);
+  entry_parser_init(&in->parser, "stdin", raw, state);
 
   if (fdm_add(fdm, fd, EPOLLIN, on_readable, in, 0) == 0)
     return 0;
@@ -94,6 +95,7 @@ int input_init_command(struct input* in,
                        struct fdm* fdm,
                        struct procs* procs,
                        const char* cmd,
+                       bool raw,
                        struct state* state,
                        void (*on_change)(void* data),
                        void* data) {
@@ -119,7 +121,7 @@ int input_init_command(struct input* in,
       .on_change = on_change,
       .data = data,
   };
-  entry_parser_init(&in->parser, "reload", state);
+  entry_parser_init(&in->parser, "reload", raw, state);
   if (fdm_add(fdm, fds[0], EPOLLIN, on_readable, in, 0) != 0) {
     LOG_ERROR("reload: failed to watch output: %s", strerror(errno));
     close(fds[0]);

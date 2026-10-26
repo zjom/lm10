@@ -21,9 +21,13 @@
  * Without -x or -X, picking the entry prints its command line, shell-quoted,
  * to stdout. If both are given, the last one wins.
  * Long options also accept --opt=VALUE, and "--" ends the options. Malformed
- * lines are skipped with a warning. */
+ * lines are skipped with a warning.
+ *
+ * Raw (dmenu) lines are taken as is instead: each one, empty or not, is an
+ * entry named by the line, which picking prints unquoted. */
 struct entry_parser {
   const char* name;  // where the entries come from, for warnings
+  bool raw;
   struct state* state;
   StrBuf buf;      // heap-backed; bytes fed but not yet a complete entry
   size_t scanned;  // bytes at the start of buf known to hold no '\n'
@@ -32,6 +36,7 @@ struct entry_parser {
 
 void entry_parser_init(struct entry_parser* ep,
                        const char* name,
+                       bool raw,
                        struct state* state);
 void entry_parser_destroy(struct entry_parser* ep);
 

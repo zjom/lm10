@@ -30,6 +30,7 @@ enum action_kind {
   ACTION_MATCH_EXEC,
   ACTION_MATCH_NEXT,
   ACTION_MATCH_PREV,
+  ACTION_QUERY_EXEC,  // pick the query itself, printed as is
 
   /* These take an argument. */
   ACTION_CHANGE_PROMPT,

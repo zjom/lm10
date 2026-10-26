@@ -10,6 +10,20 @@ a picker menu overlay for wayland (wlroots) based compositors.
 lm10 --help
 ```
 
+### dmenu mode
+
+`lm10 --dmenu` reads plain lines and prints the picked one as is, the way
+dmenu does. Return with no match prints the query, and Shift+Return
+always prints the query. Cancelling exits 1. dmenu's flags work
+alongside lm10's (`-p`, `-l`, `-fn`, `-nb`, `-nf`, `-sb`, `-sf`, `-b`, `-m`,
+`-v`). lm10 also turns on dmenu mode when it is run as `dmenu`, so it can
+stand in for dmenu:
+
+```sh
+ln -s "$(command -v lm10)" ~/.local/bin/dmenu
+ls | dmenu -p 'open: ' -l 10 -b
+```
+
 ### configuration
 
 see [examples/lm10.ini](examples/lm10.ini) for default configuration options.

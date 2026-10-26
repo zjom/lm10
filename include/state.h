@@ -12,6 +12,7 @@
 /* What picking an entry does. */
 enum state_run {
   STATE_RUN_PRINT,   // print the argv to stdout
+  STATE_RUN_PRINT_LINE,  // print the argv to stdout as is, unquoted
   STATE_RUN_EXEC,    // exec in place of lm10
   STATE_RUN_DETACH,  // run in a new session, detached from lm10
 };

@@ -17,7 +17,8 @@ void config_init(struct config* cfg) {
       .ui = {.font = STRBUF_INIT,
              .prompt = STRBUF_INIT,
              .placeholder = STRBUF_INIT,
-             .header = STRBUF_INIT},
+             .header = STRBUF_INIT,
+             .output = STRBUF_INIT},
   };
 }
 
@@ -28,6 +29,7 @@ void config_destroy(struct config* cfg) {
   sb_free(&cfg->ui.prompt);
   sb_free(&cfg->ui.placeholder);
   sb_free(&cfg->ui.header);
+  sb_free(&cfg->ui.output);
 }
 
 static void set_str(StrBuf* dst, Str s) {
@@ -64,6 +66,7 @@ static void load_default_ui(struct config_ui* ui) {
   ui->selection_radius = 8;
   ui->fuzzy = false;
   ui->show_counter = true;
+  ui->position = CONFIG_POSITION_CENTER;
   ui->colors = (struct config_colors){
       .background = rgba(0x141415f2),
       .border = rgba(0x878787ff),
@@ -84,6 +87,7 @@ static void load_default_ui(struct config_ui* ui) {
   set_str(&ui->prompt, STR("❯ "));
   set_str(&ui->placeholder, STR("Search…"));
   set_str(&ui->header, STR(""));
+  set_str(&ui->output, STR(""));
 }
 
 bool config_default_path(StrBuf* out) {
@@ -188,6 +192,8 @@ const struct config_key config_main_keys[] = {
     {"border-radius", "N", CONFIG_INT, UI(border_radius), 0},
     {"selection-radius", "N", CONFIG_INT, UI(selection_radius), 0},
     {"show-counter", "yes|no", CONFIG_BOOL, UI(show_counter), 0},
+    {"position", "center|top|bottom", CONFIG_POSITION, UI(position), 0},
+    {"output", "NAME|N", CONFIG_STRING, UI(output), 0},
 };
 const size_t config_n_main_keys =
     sizeof config_main_keys / sizeof config_main_keys[0];
@@ -254,6 +260,16 @@ static void set_main(struct config_ui* ui,
         ui->fuzzy = true;
       else
         parse_warn(loc, "match must be substring or fuzzy");
+      break;
+    case CONFIG_POSITION:
+      if (str_eq_cstr(val, "center"))
+        ui->position = CONFIG_POSITION_CENTER;
+      else if (str_eq_cstr(val, "top"))
+        ui->position = CONFIG_POSITION_TOP;
+      else if (str_eq_cstr(val, "bottom"))
+        ui->position = CONFIG_POSITION_BOTTOM;
+      else
+        parse_warn(loc, "position must be center, top or bottom");
       break;
   }
 }
@@ -561,6 +577,7 @@ void config_load_defaults(struct config* cfg) {
 
       {"Return", "match-exec"},
       {"KP_Enter", "match-exec"},
+      {"Shift+Return", "query-exec"},
       {"Control+n", "match-next"},
       {"Down", "match-next"},
       {"Tab", "match-next"},

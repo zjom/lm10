@@ -11,6 +11,10 @@ project(
   ],
 )
 add_project_arguments('-D_GNU_SOURCE', language: 'c')
+add_project_arguments(
+  '-DLM_VERSION="' + meson.project_version() + '"',
+  language: 'c',
+)
 fs = import('fs')
 
 # include_type: 'system' turns -I into -isystem, so warnings from
@@ -86,6 +90,7 @@ third_party_lib = static_library(
 core_srcs = files(
   'src/action.c',
   'src/config.c',
+  'src/dmenu.c',
   'src/draw.c',
   'src/entry_parse.c',
   'src/fdm.c',

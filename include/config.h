@@ -40,6 +40,13 @@ struct config_colors {
   struct config_color header;
 };
 
+/* Where on the output the panel goes; it is always centered horizontally. */
+enum config_position {
+  CONFIG_POSITION_CENTER,
+  CONFIG_POSITION_TOP,
+  CONFIG_POSITION_BOTTOM,
+};
+
 /* Sizes are in logical pixels. */
 struct config_ui {
   StrBuf font;  // pango font description, e.g. "Sans 13"
@@ -58,6 +65,10 @@ struct config_ui {
   bool fuzzy;         // match the query as a subsequence, best matches first
   bool show_counter;  // "matches/entries" at the right of the query row
   StrBuf header;      // lines between the query and the rows; may be empty
+  enum config_position position;
+  /* An output name, or its index from 0 in the order the compositor lists
+   * them; empty lets the compositor pick. */
+  StrBuf output;
   struct config_colors colors;
 };
 
@@ -69,6 +80,7 @@ enum config_kind {
   CONFIG_BOOL,   // yes/no, true/false, on/off, 1/0
   CONFIG_WIDTH,  // sets width and width_percent
   CONFIG_MATCH,  // substring|fuzzy, sets fuzzy
+  CONFIG_POSITION,
 };
 
 struct config_key {
