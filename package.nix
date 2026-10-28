@@ -18,7 +18,6 @@ stdenv.mkDerivation (finalAttrs: {
   pname = "lm10";
   version = lib.fileContents ./VERSION;
 
-  # Only what the build reads, so editing anything else doesn't rebuild.
   src = lib.fileset.toSource {
     root = ./.;
     fileset = lib.fileset.unions [
@@ -34,13 +33,10 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   strictDeps = true;
-  # The meson hook defaults to "plain", which adds no -O flag.
   mesonBuildType = "release";
   doCheck = true;
 
-  # pkg-config for meson's native: true lookup of wayland-scanner
   depsBuildBuild = [ pkg-config ];
-  # Tools that run at build time
   nativeBuildInputs = [
     gcc
     meson

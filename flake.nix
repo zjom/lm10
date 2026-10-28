@@ -23,7 +23,7 @@
         inherit (self.packages.${pkgs.stdenv.hostPlatform.system}) default;
       });
 
-      formatter = forAllSystems (pkgs: pkgs.nixfmt-tree);
+      formatter = forAllSystems (pkgs: pkgs.nixfmt);
 
       homeModules.default = ./home-manager.nix;
       homeManagerModules.default = self.homeModules.default;
